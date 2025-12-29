@@ -49,7 +49,7 @@ async def require_subscription(message: types.Message) -> bool:
         return False
     return True
 
-# ===== GROQ AI (СТАБИЛЬНО) =====
+# ===== GROQ AI (АКТУАЛЬНАЯ МОДЕЛЬ) =====
 def ask_mistral(prompt: str) -> str:
     if not prompt.strip():
         return "❌ Пустой запрос"
@@ -62,7 +62,7 @@ def ask_mistral(prompt: str) -> str:
     }
 
     payload = {
-        "model": "llama3-8b-8192",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {"role": "user", "content": prompt}
         ],
@@ -114,8 +114,8 @@ async def about(message: types.Message):
 
     await message.answer(
         "🤖 Telegram AI бот\n"
-        "🧠 Модель: LLaMA 3 (Groq)\n"
-        "☁️ Работает бесплатно"
+        "🧠 Модель: LLaMA 3.1 (Groq)\n"
+        "☁️ Бесплатно и быстро"
     )
 
 @dp.message_handler(lambda m: m.text == "🧠 Помощь")
