@@ -1,11 +1,10 @@
 import os
 import requests
-from collections import defaultdict, deque
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.executor import start_webhook
 
-# ================= ENV =================
+# ========= ENV =========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
@@ -27,12 +26,9 @@ PORT = int(os.getenv("PORT", 10000))
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# ================= STORAGE =================
+# ========= STORAGE =========
 USERS = set()
 ADMIN_WAITING_AD = set()
-
-# ⚠️ ВАЖНО: минимальная память (2 пары сообщений)
-DIALOG_MEMORY = defaultdict(lambda: deque(maxlen=4))
 
 AD_STATS = {
     "total_ads": 0,
@@ -40,7 +36,7 @@ AD_STATS = {
     "total_failed": 0
 }
 
-# ================= KEYBOARDS =================
+# ========= KEYBOARDS =========
 keyboard_locked = ReplyKeyboardMarkup(resize_keyboard=True)
 keyboard_locked.add(KeyboardButton("✅ Проверить подписку"))
 
@@ -58,10 +54,10 @@ keyboard_admin.add(
     KeyboardButton("📊 Статистика рекламы")
 )
 
-def get_keyboard(user_id: int):
+def get_keyboard(user_id):
     return keyboard_admin if user_id in ADMIN_IDS else keyboard_user
 
-# ================= SUBSCRIPTION =================
+# ========= SUBSCRIPTION =========
 async def is_subscribed(user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
@@ -69,7 +65,7 @@ async def is_subscribed(user_id: int) -> bool:
     except:
         return False
 
-async def require_subscription(message: types.Message) -> bool:
+async def require_subscription(message):
     if not await is_subscribed(message.from_user.id):
         await message.answer(
             f"🔒 Подпишитесь на канал:\n{CHANNEL_USERNAME}\n\n"
@@ -79,23 +75,10 @@ async def require_subscription(message: types.Message) -> bool:
         return False
     return True
 
-# ================= GROQ AI (СТАБИЛЬНО) =================
-def ask_ai(user: types.User, prompt: str) -> str:
+# ========= AI (БЕЗ ПАМЯТИ — КЛЮЧЕВО) =========
+def ask_ai(user, prompt: str) -> str:
     user_id = user.id
     username = f"@{user.username}" if user.username else "—"
-
-    # сохраняем ТОЛЬКО текст
-    DIALOG_MEMORY[user_id].append({
-        "role": "user",
-        "content": prompt
-    })
-
-    payload = {
-        "model": "llama-3.1-8b-instant",
-        "messages": list(DIALOG_MEMORY[user_id]),
-        "temperature": 0.7,
-        "max_tokens": 300
-    }
 
     try:
         r = requests.post(
@@ -104,7 +87,14 @@ def ask_ai(user: types.User, prompt: str) -> str:
                 "Authorization": f"Bearer {GROQ_API_KEY}",
                 "Content-Type": "application/json"
             },
-            json=payload,
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.7,
+                "max_tokens": 300
+            },
             timeout=25
         )
 
@@ -112,11 +102,6 @@ def ask_ai(user: types.User, prompt: str) -> str:
             return "⚠️ ИИ временно недоступен, попробуйте позже"
 
         answer = r.json()["choices"][0]["message"]["content"]
-
-        DIALOG_MEMORY[user_id].append({
-            "role": "assistant",
-            "content": answer
-        })
 
         if ADMIN_LOG_CHAT_ID:
             bot.loop.create_task(
@@ -132,11 +117,11 @@ def ask_ai(user: types.User, prompt: str) -> str:
     except Exception:
         return "⚠️ ИИ временно недоступен, попробуйте позже"
 
-# ================= HANDLERS =================
+# ========= HANDLERS =========
+
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
     USERS.add(message.from_user.id)
-    DIALOG_MEMORY[message.from_user.id].clear()
 
     if not await require_subscription(message):
         return
@@ -207,9 +192,8 @@ async def about(message: types.Message):
         return
     await message.answer(
         "🤖 AI-ассистент\n\n"
-        "🧠 LLaMA 3.1 (Groq)\n"
-        "⚡ Стабильные ответы\n"
-        "💬 Память диалога\n"
+        "🧠 Работает на LLaMA 3.1 (Groq)\n"
+        "⚡ Стабильный режим без памяти\n"
         "📢 Поддерживается рекламой"
     )
 
@@ -219,13 +203,9 @@ async def help_msg(message: types.Message):
         return
     await message.answer("Просто напиши вопрос 👌")
 
-# ⚠️ ИИ ТОЛЬКО ДЛЯ ТЕКСТА, НЕ КНОПОК
-@dp.message_handler(content_types=types.ContentTypes.TEXT)
+@dp.message_handler()
 async def chat(message: types.Message):
     USERS.add(message.from_user.id)
-
-    if message.text.startswith("🧠") or message.text.startswith("ℹ️"):
-        return
 
     if not await require_subscription(message):
         return
@@ -233,7 +213,7 @@ async def chat(message: types.Message):
     await message.answer("⏳ Думаю...")
     await message.answer(ask_ai(message.from_user, message.text))
 
-# ================= WEBHOOK =================
+# ========= WEBHOOK =========
 async def on_startup(dp):
     await bot.set_webhook(WEBHOOK_URL)
 
