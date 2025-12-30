@@ -10,6 +10,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+ADMIN_LOG_CHAT_ID = int(os.getenv("ADMIN_LOG_CHAT_ID", "0"))
+
 ADMIN_IDS = {
     int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()
 }
@@ -27,12 +29,10 @@ dp = Dispatcher(bot)
 # ===== ХРАНИЛИЩА =====
 USERS = set()
 ADMIN_WAITING_AD = set()
-
-DIALOG_MEMORY = defaultdict(lambda: deque(maxlen=10))
+DIALOG_MEMORY = defaultdict(lambda: deque(maxlen=10))  # 5 пар сообщений
 
 AD_STATS = {
     "total_ads": 0,
-    "last_sent": 0,
     "total_delivered": 0,
     "total_failed": 0
 }
@@ -76,42 +76,79 @@ async def require_subscription(message):
         return False
     return True
 
-# ===== GROQ AI (70B + ПАМЯТЬ) =====
-def ask_ai(user_id: int, prompt: str) -> str:
+# ===== GROQ AI + FALLBACK + LOG =====
+def ask_ai(user, prompt: str) -> str:
     if not prompt.strip():
         return "❌ Пустой запрос"
 
-    DIALOG_MEMORY[user_id].append({"role": "user", "content": prompt})
+    user_id = user.id
+    username = f"@{user.username}" if user.username else "—"
 
+    DIALOG_MEMORY[user_id].append({"role": "user", "content": prompt})
     messages = list(DIALOG_MEMORY[user_id])
 
-    payload = {
-        "model": "llama-3.1-70b-versatile",
-        "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": 700
-    }
-
-    try:
-        r = requests.post(
+    def call(model):
+        return requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
                 "Content-Type": "application/json"
             },
-            json=payload,
+            json={
+                "model": model,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 600
+            },
             timeout=40
         )
 
-        if r.status_code != 200:
-            return f"❌ Ошибка ИИ ({r.status_code})"
+    # 1️⃣ пробуем 70B
+    try:
+        r = call("llama-3.1-70b-versatile")
+        if r.status_code == 200:
+            answer = r.json()["choices"][0]["message"]["content"]
+            DIALOG_MEMORY[user_id].append({"role": "assistant", "content": answer})
 
-        answer = r.json()["choices"][0]["message"]["content"]
-        DIALOG_MEMORY[user_id].append({"role": "assistant", "content": answer})
-        return answer
+            if ADMIN_LOG_CHAT_ID:
+                bot.loop.create_task(
+                    bot.send_message(
+                        ADMIN_LOG_CHAT_ID,
+                        f"🧠 *Ответ ИИ*\n"
+                        f"Модель: *70B*\n"
+                        f"User ID: `{user_id}`\n"
+                        f"Username: {username}",
+                        parse_mode="Markdown"
+                    )
+                )
+            return answer
+    except:
+        pass
 
-    except Exception as e:
-        return f"❌ Ошибка ИИ: {e}"
+    # 2️⃣ fallback 8B
+    try:
+        r = call("llama-3.1-8b-instant")
+        if r.status_code == 200:
+            answer = r.json()["choices"][0]["message"]["content"]
+            DIALOG_MEMORY[user_id].append({"role": "assistant", "content": answer})
+
+            if ADMIN_LOG_CHAT_ID:
+                bot.loop.create_task(
+                    bot.send_message(
+                        ADMIN_LOG_CHAT_ID,
+                        f"⚡ *Ответ IИ (fallback)*\n"
+                        f"Модель: *8B*\n"
+                        f"User ID: `{user_id}`\n"
+                        f"Username: {username}",
+                        parse_mode="Markdown"
+                    )
+                )
+            return answer
+
+        return "❌ Временная ошибка ИИ, попробуйте позже"
+
+    except Exception:
+        return "❌ Временная ошибка ИИ, попробуйте позже"
 
 # ===== ХЭНДЛЕРЫ =====
 @dp.message_handler(commands=["start"])
@@ -123,8 +160,7 @@ async def start(message: types.Message):
         return
 
     await message.answer(
-        "👋 Добро пожаловать!\n"
-        "Можете задавать вопросы 👇",
+        "👋 Добро пожаловать!\nМожете задавать вопросы 👇",
         reply_markup=get_keyboard(message.from_user.id)
     )
 
@@ -133,35 +169,32 @@ async def create_ad(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
         return
     ADMIN_WAITING_AD.add(message.from_user.id)
-    await message.answer("📢 Скиньте сообщение рекламы (любой формат)")
+    await message.answer("📢 Скиньте сообщение рекламы")
 
 @dp.message_handler(lambda m: m.from_user.id in ADMIN_WAITING_AD, content_types=types.ContentTypes.ANY)
 async def send_ad(message: types.Message):
     ADMIN_WAITING_AD.discard(message.from_user.id)
-
     AD_STATS["total_ads"] += 1
-    delivered = failed = 0
 
-    for user_id in USERS:
+    delivered = failed = 0
+    for uid in USERS:
         try:
-            await message.copy_to(user_id)
+            await message.copy_to(uid)
             delivered += 1
         except:
             failed += 1
 
-    AD_STATS["last_sent"] = delivered
     AD_STATS["total_delivered"] += delivered
     AD_STATS["total_failed"] += failed
 
     await message.answer(
         f"✅ Реклама отправлена\n"
-        f"👥 Всего пользователей: {len(USERS)}\n"
         f"📬 Доставлено: {delivered}\n"
         f"❌ Ошибки: {failed}"
     )
 
 @dp.message_handler(lambda m: m.text == "📊 Статистика рекламы")
-async def ad_stats(message: types.Message):
+async def stats(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
         return
 
@@ -170,7 +203,7 @@ async def ad_stats(message: types.Message):
         f"📢 Кампаний: {AD_STATS['total_ads']}\n"
         f"📬 Всего доставлено: {AD_STATS['total_delivered']}\n"
         f"❌ Всего ошибок: {AD_STATS['total_failed']}\n"
-        f"👥 Пользователей в базе: {len(USERS)}",
+        f"👥 Пользователей: {len(USERS)}",
         parse_mode="Markdown"
     )
 
@@ -180,27 +213,27 @@ async def about(message: types.Message):
         return
     await message.answer(
         "🤖 *AI-ассистент нового поколения*\n\n"
-        "🧠 Работает на мощной модели *LLaMA 3.1 (Groq)*\n"
-        "NEW:\n"
-        "✔️ Бот хранит последние 5 пар сообщений\n"
-        "✔️ Более мощная база ИИ \n"
+        "🧠 Работает на LLaMA 3.1 (Groq)\n"
+        "⚡ Использует мощную модель 70B с авто-fallback\n"
+        "💬 Запоминает контекст диалога\n"
+        "📢 Поддерживается рекламой",
+        parse_mode="Markdown"
     )
 
 @dp.message_handler(lambda m: m.text == "🧠 Помощь")
 async def help_msg(message: types.Message):
     if not await require_subscription(message):
         return
-    await message.answer("Просто напиши вопрос 👌")
+    await message.answer("Просто напиши любой вопрос 👌")
 
 @dp.message_handler()
 async def chat(message: types.Message):
     USERS.add(message.from_user.id)
-
     if not await require_subscription(message):
         return
 
     await message.answer("⏳ Думаю...")
-    await message.answer(ask_ai(message.from_user.id, message.text))
+    await message.answer(ask_ai(message.from_user, message.text))
 
 # ===== WEBHOOK =====
 async def on_startup(dp):
@@ -219,4 +252,3 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
-
