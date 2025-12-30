@@ -77,7 +77,7 @@ async def require_subscription(message):
         return False
     return True
 
-# ========= AI =========
+# ========= AI (СТАБИЛЬНЫЙ 8B) =========
 def ask_ai(user, prompt: str) -> str:
     user_id = user.id
     username = f"@{user.username}" if user.username else "—"
@@ -85,59 +85,41 @@ def ask_ai(user, prompt: str) -> str:
     DIALOG_MEMORY[user_id].append({"role": "user", "content": prompt})
     messages = list(DIALOG_MEMORY[user_id])
 
-    def call(model):
-        return requests.post(
+    try:
+        r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
                 "Content-Type": "application/json"
             },
             json={
-                "model": model,
+                "model": "llama-3.1-8b-instant",
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 400
             },
-            timeout=40
+            timeout=30
         )
 
-    # 70B
-    try:
-        r = call("llama-3.1-70b-versatile")
-        if r.status_code == 200:
-            answer = r.json()["choices"][0]["message"]["content"]
-            DIALOG_MEMORY[user_id].append({"role": "assistant", "content": answer})
-            if ADMIN_LOG_CHAT_ID:
-                bot.loop.create_task(
-                    bot.send_message(
-                        ADMIN_LOG_CHAT_ID,
-                        f"🧠 Ответ 70B\nUser: `{user_id}` {username}",
-                        parse_mode="Markdown"
-                    )
-                )
-            return answer
-    except:
-        pass
+        if r.status_code != 200:
+            return "⚠️ ИИ временно недоступен, попробуйте позже"
 
-    # fallback 8B
-    try:
-        r = call("llama-3.1-8b-instant")
-        if r.status_code == 200:
-            answer = r.json()["choices"][0]["message"]["content"]
-            DIALOG_MEMORY[user_id].append({"role": "assistant", "content": answer})
-            if ADMIN_LOG_CHAT_ID:
-                bot.loop.create_task(
-                    bot.send_message(
-                        ADMIN_LOG_CHAT_ID,
-                        f"⚡ Ответ 8B\nUser: `{user_id}` {username}",
-                        parse_mode="Markdown"
-                    )
-                )
-            return answer
-    except:
-        pass
+        answer = r.json()["choices"][0]["message"]["content"]
+        DIALOG_MEMORY[user_id].append({"role": "assistant", "content": answer})
 
-    return "⚠️ ИИ временно недоступен, попробуйте позже"
+        if ADMIN_LOG_CHAT_ID:
+            bot.loop.create_task(
+                bot.send_message(
+                    ADMIN_LOG_CHAT_ID,
+                    f"🧠 Ответ ИИ (8B)\nUser: `{user_id}` {username}",
+                    parse_mode="Markdown"
+                )
+            )
+
+        return answer
+
+    except Exception:
+        return "⚠️ ИИ временно недоступен, попробуйте позже"
 
 # ========= HANDLERS =========
 
@@ -214,11 +196,11 @@ async def about(message: types.Message):
     if not await require_subscription(message):
         return
     await message.answer(
-        "🤖 AI-ассистент нового поколения\n\n"
-        "🧠 LLaMA 3.1 (Groq)\n"
-        "⚡ авто-fallback\n"
-        "💬 память диалога\n"
-        "📢 поддерживается рекламой"
+        "🤖 AI-ассистент\n\n"
+        "🧠 Работает на LLaMA 3.1 (Groq)\n"
+        "⚡ Стабильные ответы\n"
+        "💬 Запоминает контекст диалога\n"
+        "📢 Поддерживается рекламой"
     )
 
 @dp.message_handler(lambda m: m.text == "🧠 Помощь")
