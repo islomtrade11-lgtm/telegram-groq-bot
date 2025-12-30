@@ -9,8 +9,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_LOG_CHAT_ID = int(os.getenv("ADMIN_LOG_CHAT_ID", "0"))
 
+ADMIN_LOG_CHAT_ID = int(os.getenv("ADMIN_LOG_CHAT_ID", "0"))
 ADMIN_IDS = {
     int(x) for x in os.getenv("ADMIN_IDS", "").split(",")
     if x.strip().isdigit()
@@ -75,11 +75,8 @@ async def require_subscription(message):
         return False
     return True
 
-# ========= AI (БЕЗ ПАМЯТИ — КЛЮЧЕВО) =========
-def ask_ai(user, prompt: str) -> str:
-    user_id = user.id
-    username = f"@{user.username}" if user.username else "—"
-
+# ========= AI (МИНИМАЛЬНО И СТАБИЛЬНО) =========
+def ask_ai(prompt: str) -> str:
     try:
         r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -101,18 +98,13 @@ def ask_ai(user, prompt: str) -> str:
         if r.status_code != 200:
             return "⚠️ ИИ временно недоступен, попробуйте позже"
 
-        answer = r.json()["choices"][0]["message"]["content"]
+        data = r.json()
 
-        if ADMIN_LOG_CHAT_ID:
-            bot.loop.create_task(
-                bot.send_message(
-                    ADMIN_LOG_CHAT_ID,
-                    f"🧠 Ответ ИИ (8B)\nUser: `{user_id}` {username}",
-                    parse_mode="Markdown"
-                )
-            )
+        # 🔴 КРИТИЧЕСКАЯ ПРОВЕРКА
+        if "choices" not in data:
+            return "⚠️ ИИ временно недоступен, попробуйте позже"
 
-        return answer
+        return data["choices"][0]["message"]["content"]
 
     except Exception:
         return "⚠️ ИИ временно недоступен, попробуйте позже"
@@ -192,8 +184,8 @@ async def about(message: types.Message):
         return
     await message.answer(
         "🤖 AI-ассистент\n\n"
-        "🧠 Работает на LLaMA 3.1 (Groq)\n"
-        "⚡ Стабильный режим без памяти\n"
+        "🧠 Работает на Groq (LLaMA 3.1)\n"
+        "⚡ Быстро и стабильно\n"
         "📢 Поддерживается рекламой"
     )
 
@@ -211,7 +203,7 @@ async def chat(message: types.Message):
         return
 
     await message.answer("⏳ Думаю...")
-    await message.answer(ask_ai(message.from_user, message.text))
+    await message.answer(ask_ai(message.text))
 
 # ========= WEBHOOK =========
 async def on_startup(dp):
