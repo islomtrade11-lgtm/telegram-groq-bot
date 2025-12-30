@@ -10,7 +10,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_IDS = set(map(int, os.getenv("ADMIN_IDS", "").split(",")))
+ADMIN_IDS = {
+    int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()
+}
 
 if not BOT_TOKEN or not CHANNEL_USERNAME or not WEBHOOK_HOST or not GROQ_API_KEY:
     raise RuntimeError("❌ Missing ENV variables")
@@ -217,3 +219,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
