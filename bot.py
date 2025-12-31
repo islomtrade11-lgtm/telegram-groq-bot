@@ -240,8 +240,8 @@ async def stats(msg):
     await msg.answer(
         f"📊 Кампаний: {AD_STATS['total_ads']}\n"
         f"📬 Доставлено: {AD_STATS['total_delivered']}\n"
-        f"❌ Ошибок: {AD_STATS['total_failed']}"
-        f"👥 Пользователей: {len(USERS)}\n"
+        f"❌ Ошибок: {AD_STATS['total_failed']}\n"
+        f"👥 Пользователей: {len(USERS)}"
     )
 
 @dp.message_handler(lambda m: m.text == "ℹ️ О боте")
@@ -286,6 +286,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
