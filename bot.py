@@ -1,5 +1,6 @@
 import os
 import requests
+import psycopg2
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.executor import start_webhook
@@ -9,6 +10,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 ADMIN_LOG_CHAT_ID = int(os.getenv("ADMIN_LOG_CHAT_ID", "0"))
 ADMIN_IDS = {
@@ -16,9 +18,56 @@ ADMIN_IDS = {
     if x.strip().isdigit()
 }
 
-if not all([BOT_TOKEN, CHANNEL_USERNAME, WEBHOOK_HOST, GROQ_API_KEY]):
+if not all([BOT_TOKEN, CHANNEL_USERNAME, WEBHOOK_HOST, GROQ_API_KEY, DATABASE_URL]):
     raise RuntimeError("❌ Missing ENV variables")
 
+# ========= DB =========
+conn = psycopg2.connect(DATABASE_URL)
+conn.autocommit = True
+
+with conn.cursor() as c:
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS dialog_messages (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            role TEXT,
+            content TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+def get_dialog(user_id, limit=6):
+    with conn.cursor() as c:
+        c.execute("""
+            SELECT role, content FROM dialog_messages
+            WHERE user_id=%s
+            ORDER BY id DESC
+            LIMIT %s
+        """, (user_id, limit))
+        rows = c.fetchall()[::-1]
+    return [{"role": r[0], "content": r[1]} for r in rows]
+
+def save_message(user_id, role, content):
+    with conn.cursor() as c:
+        c.execute(
+            "INSERT INTO dialog_messages (user_id, role, content) VALUES (%s,%s,%s)",
+            (user_id, role, content)
+        )
+        c.execute("""
+            DELETE FROM dialog_messages
+            WHERE id NOT IN (
+                SELECT id FROM dialog_messages
+                WHERE user_id=%s
+                ORDER BY id DESC
+                LIMIT 6
+            ) AND user_id=%s
+        """, (user_id, user_id))
+
+def clear_dialog(user_id):
+    with conn.cursor() as c:
+        c.execute("DELETE FROM dialog_messages WHERE user_id=%s", (user_id,))
+
+# ========= BOT =========
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 PORT = int(os.getenv("PORT", 10000))
@@ -26,15 +75,9 @@ PORT = int(os.getenv("PORT", 10000))
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# ========= STORAGE =========
 USERS = set()
 ADMIN_WAITING_AD = set()
-
-AD_STATS = {
-    "total_ads": 0,
-    "total_delivered": 0,
-    "total_failed": 0
-}
+AD_STATS = {"total_ads": 0, "total_delivered": 0, "total_failed": 0}
 
 # ========= KEYBOARDS =========
 keyboard_locked = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -43,40 +86,44 @@ keyboard_locked.add(KeyboardButton("✅ Проверить подписку"))
 keyboard_user = ReplyKeyboardMarkup(resize_keyboard=True)
 keyboard_user.add(
     KeyboardButton("🧠 Помощь"),
-    KeyboardButton("ℹ️ О боте")
+    KeyboardButton("ℹ️ О боте"),
+    KeyboardButton("🗑 Очистить диалог")
 )
 
 keyboard_admin = ReplyKeyboardMarkup(resize_keyboard=True)
 keyboard_admin.add(
     KeyboardButton("🧠 Помощь"),
     KeyboardButton("ℹ️ О боте"),
+    KeyboardButton("🗑 Очистить диалог"),
     KeyboardButton("📢 Создать рекламу"),
     KeyboardButton("📊 Статистика рекламы")
 )
 
-def get_keyboard(user_id):
-    return keyboard_admin if user_id in ADMIN_IDS else keyboard_user
+def get_keyboard(uid):
+    return keyboard_admin if uid in ADMIN_IDS else keyboard_user
 
 # ========= SUBSCRIPTION =========
-async def is_subscribed(user_id: int) -> bool:
+async def is_subscribed(uid):
     try:
-        member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ("member", "administrator", "creator")
+        m = await bot.get_chat_member(CHANNEL_USERNAME, uid)
+        return m.status in ("member", "administrator", "creator")
     except:
         return False
 
-async def require_subscription(message):
-    if not await is_subscribed(message.from_user.id):
-        await message.answer(
-            f"🔒 Подпишитесь на канал:\n{CHANNEL_USERNAME}\n\n"
-            "После подписки нажмите кнопку 👇",
+async def require_subscription(msg):
+    if not await is_subscribed(msg.from_user.id):
+        await msg.answer(
+            f"🔒 Подпишитесь на канал:\n{CHANNEL_USERNAME}",
             reply_markup=keyboard_locked
         )
         return False
     return True
 
-# ========= AI (МИНИМАЛЬНО И СТАБИЛЬНО) =========
-def ask_ai(prompt: str) -> str:
+# ========= AI (АНТИ-ОБРЫВАНИЕ) =========
+def ask_ai(user_id, prompt):
+    messages = get_dialog(user_id)
+    messages.append({"role": "user", "content": prompt})
+
     try:
         r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -86,124 +133,108 @@ def ask_ai(prompt: str) -> str:
             },
             json={
                 "model": "llama-3.1-8b-instant",
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
+                "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 300
+                "max_tokens": 800  # 🔥 анти-обрыв
             },
-            timeout=25
+            timeout=40
         )
 
         if r.status_code != 200:
-            return "⚠️ ИИ временно недоступен, попробуйте позже"
+            return "⚠️ ИИ временно недоступен"
 
-        data = r.json()
-
-        # 🔴 КРИТИЧЕСКАЯ ПРОВЕРКА
-        if "choices" not in data:
-            return "⚠️ ИИ временно недоступен, попробуйте позже"
-
-        return data["choices"][0]["message"]["content"]
+        answer = r.json()["choices"][0]["message"]["content"]
+        save_message(user_id, "user", prompt)
+        save_message(user_id, "assistant", answer)
+        return answer
 
     except Exception:
-        return "⚠️ ИИ временно недоступен, попробуйте позже"
+        return "⚠️ ИИ временно недоступен"
 
 # ========= HANDLERS =========
-
 @dp.message_handler(commands=["start"])
-async def start(message: types.Message):
-    USERS.add(message.from_user.id)
+async def start(msg):
+    USERS.add(msg.from_user.id)
+    clear_dialog(msg.from_user.id)
 
-    if not await require_subscription(message):
+    if not await require_subscription(msg):
         return
 
-    await message.answer(
-        "👋 Добро пожаловать!\nМожете задавать вопросы 👇",
-        reply_markup=get_keyboard(message.from_user.id)
+    await msg.answer(
+        "👋 Добро пожаловать!",
+        reply_markup=get_keyboard(msg.from_user.id)
     )
+
+@dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
+async def clear(msg):
+    clear_dialog(msg.from_user.id)
+    await msg.answer("🧹 Диалог очищен", reply_markup=get_keyboard(msg.from_user.id))
 
 @dp.message_handler(lambda m: m.text == "✅ Проверить подписку")
-async def check_subscription(message: types.Message):
-    if await is_subscribed(message.from_user.id):
-        await message.answer(
-            "✅ Подписка подтверждена!",
-            reply_markup=get_keyboard(message.from_user.id)
-        )
+async def check_sub(msg):
+    if await is_subscribed(msg.from_user.id):
+        await msg.answer("✅ Подписка подтверждена", reply_markup=get_keyboard(msg.from_user.id))
     else:
-        await message.answer(
-            f"❌ Вы не подписаны:\n{CHANNEL_USERNAME}",
-            reply_markup=keyboard_locked
-        )
+        await msg.answer("❌ Вы не подписаны", reply_markup=keyboard_locked)
 
 @dp.message_handler(lambda m: m.text == "📢 Создать рекламу")
-async def create_ad(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
+async def create_ad(msg):
+    if msg.from_user.id not in ADMIN_IDS:
         return
-    ADMIN_WAITING_AD.add(message.from_user.id)
-    await message.answer("📢 Скиньте сообщение рекламы")
+    ADMIN_WAITING_AD.add(msg.from_user.id)
+    await msg.answer("📢 Пришлите рекламу")
 
 @dp.message_handler(lambda m: m.from_user.id in ADMIN_WAITING_AD, content_types=types.ContentTypes.ANY)
-async def send_ad(message: types.Message):
-    ADMIN_WAITING_AD.discard(message.from_user.id)
+async def send_ad(msg):
+    ADMIN_WAITING_AD.discard(msg.from_user.id)
     AD_STATS["total_ads"] += 1
 
-    delivered = failed = 0
+    d = f = 0
     for uid in USERS:
         try:
-            await message.copy_to(uid)
-            delivered += 1
+            await msg.copy_to(uid)
+            d += 1
         except:
-            failed += 1
+            f += 1
 
-    AD_STATS["total_delivered"] += delivered
-    AD_STATS["total_failed"] += failed
-
-    await message.answer(
-        f"✅ Реклама отправлена\n"
-        f"📬 Доставлено: {delivered}\n"
-        f"❌ Ошибки: {failed}"
-    )
+    AD_STATS["total_delivered"] += d
+    AD_STATS["total_failed"] += f
+    await msg.answer(f"📢 Отправлено: {d}, ошибки: {f}")
 
 @dp.message_handler(lambda m: m.text == "📊 Статистика рекламы")
-async def stats(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
+async def stats(msg):
+    if msg.from_user.id not in ADMIN_IDS:
         return
-
-    await message.answer(
-        f"📊 Статистика\n\n"
-        f"📢 Кампаний: {AD_STATS['total_ads']}\n"
+    await msg.answer(
+        f"📊 Кампаний: {AD_STATS['total_ads']}\n"
         f"📬 Доставлено: {AD_STATS['total_delivered']}\n"
-        f"❌ Ошибок: {AD_STATS['total_failed']}\n"
-        f"👥 Пользователей: {len(USERS)}"
+        f"❌ Ошибок: {AD_STATS['total_failed']}"
     )
 
 @dp.message_handler(lambda m: m.text == "ℹ️ О боте")
-async def about(message: types.Message):
-    if not await require_subscription(message):
+async def about(msg):
+    if not await require_subscription(msg):
         return
-    await message.answer(
-        "🤖 AI-ассистент\n\n"
-        "🧠 Работает на Groq (LLaMA 3.1)\n"
-        "⚡ Быстро и стабильно\n"
+    await msg.answer(
+        "🤖 AI-ассистент\n"
+        "🧠 Память в PostgreSQL\n"
+        "⚡ Без обрывов ответов\n"
         "📢 Поддерживается рекламой"
     )
 
 @dp.message_handler(lambda m: m.text == "🧠 Помощь")
-async def help_msg(message: types.Message):
-    if not await require_subscription(message):
+async def help_msg(msg):
+    if not await require_subscription(msg):
         return
-    await message.answer("Просто напиши вопрос 👌")
+    await msg.answer("Просто напишите вопрос 👌")
 
 @dp.message_handler()
-async def chat(message: types.Message):
-    USERS.add(message.from_user.id)
-
-    if not await require_subscription(message):
+async def chat(msg):
+    USERS.add(msg.from_user.id)
+    if not await require_subscription(msg):
         return
-
-    await message.answer("⏳ Думаю...")
-    await message.answer(ask_ai(message.text))
+    await msg.answer("⏳ Думаю...")
+    await msg.answer(ask_ai(msg.from_user.id, msg.text))
 
 # ========= WEBHOOK =========
 async def on_startup(dp):
