@@ -119,7 +119,7 @@ async def require_subscription(msg):
         return False
     return True
 
-# ========= AI (АНТИ-ОБРЫВАНИЕ) =========
+# ========= AI (АНТИ-ОБРЫВАНИЕ, БЕЗ ИЗМЕНЕНИЙ) =========
 def ask_ai(user_id, prompt):
     messages = get_dialog(user_id)
     messages.append({"role": "user", "content": prompt})
@@ -135,35 +135,66 @@ def ask_ai(user_id, prompt):
                 "model": "llama-3.1-8b-instant",
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 800  # 🔥 анти-обрыв
+                "max_tokens": 800
             },
             timeout=40
         )
 
         if r.status_code != 200:
+            if ADMIN_LOG_CHAT_ID:
+                bot.loop.create_task(
+                    bot.send_message(
+                        ADMIN_LOG_CHAT_ID,
+                        f"❌ Ошибка ИИ\nUser ID: `{user_id}`\nStatus: {r.status_code}",
+                        parse_mode="Markdown"
+                    )
+                )
             return "⚠️ ИИ временно недоступен"
 
         answer = r.json()["choices"][0]["message"]["content"]
         save_message(user_id, "user", prompt)
         save_message(user_id, "assistant", answer)
+
+        if ADMIN_LOG_CHAT_ID:
+            bot.loop.create_task(
+                bot.send_message(
+                    ADMIN_LOG_CHAT_ID,
+                    f"🧠 Ответ ИИ\nUser ID: `{user_id}`",
+                    parse_mode="Markdown"
+                )
+            )
+
         return answer
 
-    except Exception:
+    except Exception as e:
+        if ADMIN_LOG_CHAT_ID:
+            bot.loop.create_task(
+                bot.send_message(
+                    ADMIN_LOG_CHAT_ID,
+                    f"❌ Exception ИИ\nUser ID: `{user_id}`\n{e}",
+                    parse_mode="Markdown"
+                )
+            )
         return "⚠️ ИИ временно недоступен"
 
 # ========= HANDLERS =========
 @dp.message_handler(commands=["start"])
 async def start(msg):
+    is_new = msg.from_user.id not in USERS
     USERS.add(msg.from_user.id)
     clear_dialog(msg.from_user.id)
+
+    if is_new and ADMIN_LOG_CHAT_ID:
+        await bot.send_message(
+            ADMIN_LOG_CHAT_ID,
+            f"🆕 Новый пользователь\nUser ID: `{msg.from_user.id}`",
+            parse_mode="Markdown"
+        )
 
     if not await require_subscription(msg):
         return
 
-    await msg.answer(
-        "👋 Добро пожаловать!",
-        reply_markup=get_keyboard(msg.from_user.id)
-    )
+    await msg.answer("👋 Добро пожаловать!", reply_markup=get_keyboard(msg.from_user.id))
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -182,6 +213,12 @@ async def create_ad(msg):
     if msg.from_user.id not in ADMIN_IDS:
         return
     ADMIN_WAITING_AD.add(msg.from_user.id)
+    if ADMIN_LOG_CHAT_ID:
+        await bot.send_message(
+            ADMIN_LOG_CHAT_ID,
+            f"📢 Админ начал рассылку\nAdmin ID: `{msg.from_user.id}`",
+            parse_mode="Markdown"
+        )
     await msg.answer("📢 Пришлите рекламу")
 
 @dp.message_handler(lambda m: m.from_user.id in ADMIN_WAITING_AD, content_types=types.ContentTypes.ANY)
@@ -199,6 +236,7 @@ async def send_ad(msg):
 
     AD_STATS["total_delivered"] += d
     AD_STATS["total_failed"] += f
+
     await msg.answer(f"📢 Отправлено: {d}, ошибки: {f}")
 
 @dp.message_handler(lambda m: m.text == "📊 Статистика рекламы")
@@ -208,7 +246,8 @@ async def stats(msg):
     await msg.answer(
         f"📊 Кампаний: {AD_STATS['total_ads']}\n"
         f"📬 Доставлено: {AD_STATS['total_delivered']}\n"
-        f"❌ Ошибок: {AD_STATS['total_failed']}"
+        f"❌ Ошибок: {AD_STATS['total_failed']}\n"
+        f"👥 Пользователей: {len(USERS)}"
     )
 
 @dp.message_handler(lambda m: m.text == "ℹ️ О боте")
