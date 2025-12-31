@@ -120,7 +120,7 @@ async def require_subscription(msg):
         return False
     return True
 
-# ========= AI (СТАБИЛЬНЫЙ + АНТИ-ОБРЫВ) =========
+# ========= AI =========
 def ask_ai(user_id, prompt):
     messages = get_dialog(user_id)
     messages.append({"role": "user", "content": prompt})
@@ -142,20 +142,11 @@ def ask_ai(user_id, prompt):
         )
 
         if r.status_code != 200:
-            return "⚠️ ИИ временно недоступен"
+            raise RuntimeError(f"HTTP {r.status_code}")
 
         answer = r.json()["choices"][0]["message"]["content"]
         save_message(user_id, "user", prompt)
         save_message(user_id, "assistant", answer)
-
-        if ADMIN_LOG_CHAT_ID:
-            asyncio.create_task(
-                bot.send_message(
-                    ADMIN_LOG_CHAT_ID,
-                    f"🧠 Ответ ИИ\nUser ID: {user_id}"
-                )
-            )
-
         return answer
 
     except Exception as e:
@@ -171,8 +162,15 @@ def ask_ai(user_id, prompt):
 # ========= HANDLERS =========
 @dp.message_handler(commands=["start"])
 async def start(msg):
+    is_new = msg.from_user.id not in USERS
     USERS.add(msg.from_user.id)
     clear_dialog(msg.from_user.id)
+
+    if is_new and ADMIN_LOG_CHAT_ID:
+        await bot.send_message(
+            ADMIN_LOG_CHAT_ID,
+            f"👤 Новый пользователь\nID: {msg.from_user.id}\n@{msg.from_user.username}"
+        )
 
     if not await require_subscription(msg):
         return
@@ -199,6 +197,13 @@ async def create_ad(msg):
     if msg.from_user.id not in ADMIN_IDS:
         return
     ADMIN_WAITING_AD.add(msg.from_user.id)
+
+    if ADMIN_LOG_CHAT_ID:
+        await bot.send_message(
+            ADMIN_LOG_CHAT_ID,
+            f"📢 Админ начал создание рекламы\nAdmin ID: {msg.from_user.id}"
+        )
+
     await msg.answer("📢 Пришлите рекламу")
 
 @dp.message_handler(lambda m: m.from_user.id in ADMIN_WAITING_AD, content_types=types.ContentTypes.ANY)
@@ -216,6 +221,12 @@ async def send_ad(msg):
 
     AD_STATS["total_delivered"] += d
     AD_STATS["total_failed"] += f
+
+    if ADMIN_LOG_CHAT_ID:
+        await bot.send_message(
+            ADMIN_LOG_CHAT_ID,
+            f"📢 Реклама отправлена\nДоставлено: {d}\nОшибки: {f}"
+        )
 
     await msg.answer(f"📢 Отправлено: {d}, ошибки: {f}")
 
