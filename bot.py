@@ -1,6 +1,7 @@
 import os
 import requests
 import psycopg2
+import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.executor import start_webhook
@@ -119,7 +120,7 @@ async def require_subscription(msg):
         return False
     return True
 
-# ========= AI (АНТИ-ОБРЫВАНИЕ, БЕЗ ИЗМЕНЕНИЙ) =========
+# ========= AI (СТАБИЛЬНЫЙ + АНТИ-ОБРЫВ) =========
 def ask_ai(user_id, prompt):
     messages = get_dialog(user_id)
     messages.append({"role": "user", "content": prompt})
@@ -141,14 +142,6 @@ def ask_ai(user_id, prompt):
         )
 
         if r.status_code != 200:
-            if ADMIN_LOG_CHAT_ID:
-                bot.loop.create_task(
-                    bot.send_message(
-                        ADMIN_LOG_CHAT_ID,
-                        f"❌ Ошибка ИИ\nUser ID: `{user_id}`\nStatus: {r.status_code}",
-                        parse_mode="Markdown"
-                    )
-                )
             return "⚠️ ИИ временно недоступен"
 
         answer = r.json()["choices"][0]["message"]["content"]
@@ -156,11 +149,10 @@ def ask_ai(user_id, prompt):
         save_message(user_id, "assistant", answer)
 
         if ADMIN_LOG_CHAT_ID:
-            bot.loop.create_task(
+            asyncio.create_task(
                 bot.send_message(
                     ADMIN_LOG_CHAT_ID,
-                    f"🧠 Ответ ИИ\nUser ID: `{user_id}`",
-                    parse_mode="Markdown"
+                    f"🧠 Ответ ИИ\nUser ID: {user_id}"
                 )
             )
 
@@ -168,11 +160,10 @@ def ask_ai(user_id, prompt):
 
     except Exception as e:
         if ADMIN_LOG_CHAT_ID:
-            bot.loop.create_task(
+            asyncio.create_task(
                 bot.send_message(
                     ADMIN_LOG_CHAT_ID,
-                    f"❌ Exception ИИ\nUser ID: `{user_id}`\n{e}",
-                    parse_mode="Markdown"
+                    f"❌ Ошибка ИИ\nUser ID: {user_id}\n{e}"
                 )
             )
         return "⚠️ ИИ временно недоступен"
@@ -180,21 +171,16 @@ def ask_ai(user_id, prompt):
 # ========= HANDLERS =========
 @dp.message_handler(commands=["start"])
 async def start(msg):
-    is_new = msg.from_user.id not in USERS
     USERS.add(msg.from_user.id)
     clear_dialog(msg.from_user.id)
-
-    if is_new and ADMIN_LOG_CHAT_ID:
-        await bot.send_message(
-            ADMIN_LOG_CHAT_ID,
-            f"🆕 Новый пользователь\nUser ID: `{msg.from_user.id}`",
-            parse_mode="Markdown"
-        )
 
     if not await require_subscription(msg):
         return
 
-    await msg.answer("👋 Добро пожаловать!", reply_markup=get_keyboard(msg.from_user.id))
+    await msg.answer(
+        "👋 Добро пожаловать!",
+        reply_markup=get_keyboard(msg.from_user.id)
+    )
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -213,12 +199,6 @@ async def create_ad(msg):
     if msg.from_user.id not in ADMIN_IDS:
         return
     ADMIN_WAITING_AD.add(msg.from_user.id)
-    if ADMIN_LOG_CHAT_ID:
-        await bot.send_message(
-            ADMIN_LOG_CHAT_ID,
-            f"📢 Админ начал рассылку\nAdmin ID: `{msg.from_user.id}`",
-            parse_mode="Markdown"
-        )
     await msg.answer("📢 Пришлите рекламу")
 
 @dp.message_handler(lambda m: m.from_user.id in ADMIN_WAITING_AD, content_types=types.ContentTypes.ANY)
@@ -245,9 +225,9 @@ async def stats(msg):
         return
     await msg.answer(
         f"📊 Кампаний: {AD_STATS['total_ads']}\n"
+        f"👥 Пользователей: {len(USERS)}\n"
         f"📬 Доставлено: {AD_STATS['total_delivered']}\n"
-        f"❌ Ошибок: {AD_STATS['total_failed']}\n"
-        f"👥 Пользователей: {len(USERS)}"
+        f"❌ Ошибок: {AD_STATS['total_failed']}"
     )
 
 @dp.message_handler(lambda m: m.text == "ℹ️ О боте")
