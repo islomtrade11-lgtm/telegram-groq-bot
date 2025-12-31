@@ -227,10 +227,12 @@ async def send_ad(msg):
             ADMIN_LOG_CHAT_ID,
             f"📢 Реклама отправлена\nДоставлено: {d}\nОшибки: {f}"
         )
-await msg.answer(
-    f"📢 Отправлено: {d}\n"
-    f"❌ Ошибки: {f}"
-)
+
+    # ✅ ВАЖНО: ЭТО ДОЛЖНО БЫТЬ ВНУТРИ ФУНКЦИИ
+    await msg.answer(
+        f"📢 Отправлено: {d}\n"
+        f"❌ Ошибки: {f}"
+    )
 @dp.message_handler(lambda m: m.text == "📊 Статистика рекламы")
 async def stats(msg):
     if msg.from_user.id not in ADMIN_IDS:
@@ -284,5 +286,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
