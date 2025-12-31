@@ -228,7 +228,10 @@ async def send_ad(msg):
             f"📢 Реклама отправлена\nДоставлено: {d}\nОшибки: {f}"
         )
 
-    await msg.answer(f"📢 Отправлено: {d}, ошибки: {f}")
+await msg.answer(
+    f"📢 Отправлено: {d}\n"
+    f"❌ Ошибки: {f}"
+)
 
 @dp.message_handler(lambda m: m.text == "📊 Статистика рекламы")
 async def stats(msg):
@@ -236,9 +239,9 @@ async def stats(msg):
         return
     await msg.answer(
         f"📊 Кампаний: {AD_STATS['total_ads']}\n"
-        f"👥 Пользователей: {len(USERS)}\n"
         f"📬 Доставлено: {AD_STATS['total_delivered']}\n"
         f"❌ Ошибок: {AD_STATS['total_failed']}"
+        f"👥 Пользователей: {len(USERS)}\n"
     )
 
 @dp.message_handler(lambda m: m.text == "ℹ️ О боте")
@@ -283,3 +286,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
