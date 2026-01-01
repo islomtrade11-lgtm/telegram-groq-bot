@@ -112,14 +112,8 @@ async def is_subscribed(uid):
         return False
 
 async def require_subscription(msg):
-    if not await is_subscribed(msg.from_user.id):
-        await msg.answer(
-            f"🔒 Подпишитесь на канал:\n{CHANNEL_USERNAME}",
-            reply_markup=keyboard_locked
-        )
-        return False
-    return True
-
+    if not CHANNEL_USERNAME:
+        return True
 # ========= AI =========
 def ask_ai(user_id, prompt):
     messages = get_dialog(user_id)
@@ -286,6 +280,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
