@@ -19,8 +19,14 @@ ADMIN_IDS = {
     if x.strip().isdigit()
 }
 
-if not all([BOT_TOKEN, CHANNEL_USERNAME, WEBHOOK_HOST, GROQ_API_KEY, DATABASE_URL]):
-    raise RuntimeError("❌ Missing ENV variables")
+async def is_subscribed(uid):
+    if not CHANNEL_USERNAME:
+        return True  # подписка отключена
+    try:
+        m = await bot.get_chat_member(CHANNEL_USERNAME, uid)
+        return m.status in ("member", "administrator", "creator")
+    except:
+        return False
 
 # ========= DB =========
 conn = psycopg2.connect(DATABASE_URL)
@@ -280,6 +286,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
