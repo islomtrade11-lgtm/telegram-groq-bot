@@ -13,7 +13,7 @@ CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
-DEEPAI_API_KEY = os.getenv("DEEPAI_API_KEY", "")
+PRODIA_API_KEY = os.getenv("PRODIA_API_KEY")
 
 ADMIN_LOG_CHAT_ID = int(os.getenv("ADMIN_LOG_CHAT_ID", "0"))
 ADMIN_IDS = {
@@ -215,13 +215,42 @@ def ask_ai(user_id, prompt):
 # ========= IMAGE =========
 def generate_image(prompt):
     r = requests.post(
-        "https://api.deepai.org/api/text2img",
-        data={"text": prompt},
-        headers={"api-key": DEEPAI_API_KEY} if DEEPAI_API_KEY else {}
+        "https://api.prodia.com/v1/sd/generate",
+        headers={
+            "Authorization": f"Bearer {PRODIA_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "prompt": prompt,
+            "model": "sdxl",
+            "steps": 25,
+            "cfg_scale": 7
+        },
+        timeout=60
     )
+
     if r.status_code != 200:
         return None
-    return r.json().get("output_url")
+
+    job = r.json().get("job")
+    if not job:
+        return None
+
+    # ждём результат
+    for _ in range(20):
+        s = requests.get(
+            f"https://api.prodia.com/v1/job/{job}",
+            headers={"Authorization": f"Bearer {PRODIA_API_KEY}"}
+        )
+        if s.status_code != 200:
+            return None
+        data = s.json()
+        if data.get("status") == "succeeded":
+            return data["imageUrl"]
+        if data.get("status") == "failed":
+            return None
+
+    return None
 
 # ========= HANDLERS =========
 @dp.message_handler(commands=["start"])
@@ -286,4 +315,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
