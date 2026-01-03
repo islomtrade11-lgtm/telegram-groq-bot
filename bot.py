@@ -3,6 +3,7 @@ import requests
 import psycopg2
 import asyncio
 from datetime import date
+from urllib.parse import quote
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.executor import start_webhook
@@ -13,7 +14,6 @@ CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
-PRODIA_API_KEY = os.getenv("PRODIA_API_KEY")
 
 ADMIN_LOG_CHAT_ID = int(os.getenv("ADMIN_LOG_CHAT_ID", "0"))
 ADMIN_IDS = {
@@ -26,7 +26,6 @@ conn = psycopg2.connect(DATABASE_URL)
 conn.autocommit = True
 
 with conn.cursor() as c:
-    # диалоги (БЕЗ ИЗМЕНЕНИЙ)
     c.execute("""
         CREATE TABLE IF NOT EXISTS dialog_messages (
             id SERIAL PRIMARY KEY,
@@ -36,7 +35,7 @@ with conn.cursor() as c:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # 👇 НОВОЕ (users)
+    # === NEW ===
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -45,6 +44,7 @@ with conn.cursor() as c:
         )
     """)
 
+# ========= DIALOG =========
 def get_dialog(user_id, limit=6):
     with conn.cursor() as c:
         c.execute("""
@@ -107,6 +107,10 @@ def can_generate_image(user_id):
         )
         return True, 3 - (used + 1)
 
+# ========= IMAGE (FREE) =========
+def generate_image(prompt):
+    return f"https://image.pollinations.ai/prompt/{quote(prompt)}"
+
 # ========= BOT =========
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
@@ -117,8 +121,8 @@ dp = Dispatcher(bot)
 
 USERS = set()
 ADMIN_WAITING_AD = set()
-AD_STATS = {"total_ads": 0, "total_delivered": 0, "total_failed": 0}
 WAITING_IMAGE = set()
+AD_STATS = {"total_ads": 0, "total_delivered": 0, "total_failed": 0}
 
 # ========= KEYBOARDS =========
 keyboard_locked = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -141,16 +145,6 @@ keyboard_admin.add(
     KeyboardButton("📢 Создать рекламу"),
     KeyboardButton("📊 Статистика рекламы")
 )
-
-BUTTON_TEXTS = {
-    "🧠 Помощь",
-    "ℹ️ О боте",
-    "🗑 Очистить диалог",
-    "🖼 Создать изображение",
-    "📢 Создать рекламу",
-    "📊 Статистика рекламы",
-    "✅ Проверить подписку",
-}
 
 def get_keyboard(uid):
     return keyboard_admin if uid in ADMIN_IDS else keyboard_user
@@ -212,13 +206,6 @@ def ask_ai(user_id, prompt):
             )
         return "⚠️ ИИ временно недоступен"
 
-# ========= IMAGE =========
-import urllib.parse
-
-def generate_image(prompt):
-    safe_prompt = urllib.parse.quote(prompt)
-    return f"https://image.pollinations.ai/prompt/{safe_prompt}"
-
 # ========= HANDLERS =========
 @dp.message_handler(commands=["start"])
 async def start(msg):
@@ -233,19 +220,14 @@ async def image_btn(msg):
         await msg.answer("❌ Лимит 3 изображения в день исчерпан")
         return
     WAITING_IMAGE.add(msg.from_user.id)
-    await msg.answer(f"🖼 Опишите изображение\nОсталось сегодня: {left}")
+    await msg.answer(f"🖼 Напишите описание изображения\nОсталось сегодня: {left}")
 
 @dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE)
 async def image_prompt(msg):
     WAITING_IMAGE.discard(msg.from_user.id)
-    await msg.answer("🎨 Генерирую изображение...")
-    url = generate_image(msg.text)
-    if not url:
-        await msg.answer("❌ Не удалось создать изображение")
-        return
-    await msg.answer_photo(url)
+    await msg.answer_photo(generate_image(msg.text))
 
-# ======= СТАРЫЕ ХЕНДЛЕРЫ (1 В 1) =======
+# ======= СТАРЫЕ ФУНКЦИИ (1 В 1) =======
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
     clear_dialog(msg.from_user.id)
@@ -255,10 +237,56 @@ async def clear(msg):
 async def help_msg(msg):
     await msg.answer("Просто напишите вопрос 👌")
 
+@dp.message_handler(lambda m: m.text == "📢 Создать рекламу")
+async def create_ad(msg):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    ADMIN_WAITING_AD.add(msg.from_user.id)
+    await msg.answer("📢 Пришлите рекламу")
+
+@dp.message_handler(lambda m: m.from_user.id in ADMIN_WAITING_AD, content_types=types.ContentTypes.ANY)
+async def send_ad(msg):
+    ADMIN_WAITING_AD.discard(msg.from_user.id)
+    AD_STATS["total_ads"] += 1
+
+    d = f = 0
+    for uid in USERS:
+        try:
+            await msg.copy_to(uid)
+            d += 1
+        except:
+            f += 1
+
+    AD_STATS["total_delivered"] += d
+    AD_STATS["total_failed"] += f
+
+    await msg.answer(
+        f"📢 Отправлено: {d}\n"
+        f"❌ Ошибки: {f}"
+    )
+
+@dp.message_handler(lambda m: m.text == "📊 Статистика рекламы")
+async def stats(msg):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    await msg.answer(
+        f"📊 Кампаний: {AD_STATS['total_ads']}\n"
+        f"📬 Доставлено: {AD_STATS['total_delivered']}\n"
+        f"❌ Ошибок: {AD_STATS['total_failed']}\n"
+        f"👥 Пользователей: {len(USERS)}"
+    )
+
+@dp.message_handler(lambda m: m.text == "ℹ️ О боте")
+async def about(msg):
+    await msg.answer(
+        "🤖 AI-ассистент\n"
+        "🧠 Память в PostgreSQL\n"
+        "🖼 Генерация изображений\n"
+        "📢 Поддерживается рекламой"
+    )
+
 @dp.message_handler()
 async def chat(msg):
-    if msg.text in BUTTON_TEXTS or msg.from_user.id in WAITING_IMAGE:
-        return
     USERS.add(msg.from_user.id)
     if not await require_subscription(msg):
         return
@@ -282,6 +310,3 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
-
-
-
