@@ -2,7 +2,6 @@ import os
 import requests
 import psycopg2
 import asyncio
-from datetime import date
 from urllib.parse import quote
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
@@ -33,14 +32,6 @@ with conn.cursor() as c:
             role TEXT,
             content TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    # === NEW ===
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            images_used INT DEFAULT 0,
-            images_date DATE
         )
     """)
 
@@ -76,38 +67,7 @@ def clear_dialog(user_id):
     with conn.cursor() as c:
         c.execute("DELETE FROM dialog_messages WHERE user_id=%s", (user_id,))
 
-# ========= IMAGE LIMIT =========
-def can_generate_image(user_id):
-    today = date.today()
-    with conn.cursor() as c:
-        c.execute("SELECT images_used, images_date FROM users WHERE user_id=%s", (user_id,))
-        row = c.fetchone()
-
-        if not row:
-            c.execute(
-                "INSERT INTO users (user_id, images_used, images_date) VALUES (%s,1,%s)",
-                (user_id, today)
-            )
-            return True, 2
-
-        used, d = row
-        if d != today:
-            c.execute(
-                "UPDATE users SET images_used=1, images_date=%s WHERE user_id=%s",
-                (today, user_id)
-            )
-            return True, 2
-
-        if used >= 3:
-            return False, 0
-
-        c.execute(
-            "UPDATE users SET images_used=images_used+1 WHERE user_id=%s",
-            (user_id,)
-        )
-        return True, 3 - (used + 1)
-
-# ========= IMAGE (FREE) =========
+# ========= IMAGE (FREE, NO LIMIT) =========
 def generate_image(prompt):
     return f"https://image.pollinations.ai/prompt/{quote(prompt)}"
 
@@ -122,7 +82,12 @@ dp = Dispatcher(bot)
 USERS = set()
 ADMIN_WAITING_AD = set()
 WAITING_IMAGE = set()
-AD_STATS = {"total_ads": 0, "total_delivered": 0, "total_failed": 0}
+
+AD_STATS = {
+    "total_ads": 0,
+    "total_delivered": 0,
+    "total_failed": 0
+}
 
 # ========= KEYBOARDS =========
 keyboard_locked = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -201,7 +166,7 @@ def ask_ai(user_id, prompt):
             asyncio.create_task(
                 bot.send_message(
                     ADMIN_LOG_CHAT_ID,
-                    f"❌ Ошибка ИИ\nUser ID: {user_id}\n{e}"
+                    f"❌ Ошибка ИИ\nUser ID: {user_id}\n{repr(e)}"
                 )
             )
         return "⚠️ ИИ временно недоступен"
@@ -209,25 +174,28 @@ def ask_ai(user_id, prompt):
 # ========= HANDLERS =========
 @dp.message_handler(commands=["start"])
 async def start(msg):
+    is_new = msg.from_user.id not in USERS
     USERS.add(msg.from_user.id)
     clear_dialog(msg.from_user.id)
+
+    if is_new and ADMIN_LOG_CHAT_ID:
+        await bot.send_message(
+            ADMIN_LOG_CHAT_ID,
+            f"👤 Новый пользователь\nID: {msg.from_user.id}\n@{msg.from_user.username}"
+        )
+
     await msg.answer("👋 Добро пожаловать!", reply_markup=get_keyboard(msg.from_user.id))
 
 @dp.message_handler(lambda m: m.text == "🖼 Создать изображение")
 async def image_btn(msg):
-    ok, left = can_generate_image(msg.from_user.id)
-    if not ok:
-        await msg.answer("❌ Лимит 3 изображения в день исчерпан")
-        return
     WAITING_IMAGE.add(msg.from_user.id)
-    await msg.answer(f"🖼 Напишите описание изображения\nОсталось сегодня: {left}")
+    await msg.answer("🖼 Напишите описание изображения")
 
 @dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE)
 async def image_prompt(msg):
     WAITING_IMAGE.discard(msg.from_user.id)
     await msg.answer_photo(generate_image(msg.text))
 
-# ======= СТАРЫЕ ФУНКЦИИ (1 В 1) =======
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
     clear_dialog(msg.from_user.id)
@@ -241,7 +209,15 @@ async def help_msg(msg):
 async def create_ad(msg):
     if msg.from_user.id not in ADMIN_IDS:
         return
+
     ADMIN_WAITING_AD.add(msg.from_user.id)
+
+    if ADMIN_LOG_CHAT_ID:
+        await bot.send_message(
+            ADMIN_LOG_CHAT_ID,
+            f"📢 Админ начал создание рекламы\nAdmin ID: {msg.from_user.id}"
+        )
+
     await msg.answer("📢 Пришлите рекламу")
 
 @dp.message_handler(lambda m: m.from_user.id in ADMIN_WAITING_AD, content_types=types.ContentTypes.ANY)
@@ -260,10 +236,13 @@ async def send_ad(msg):
     AD_STATS["total_delivered"] += d
     AD_STATS["total_failed"] += f
 
-    await msg.answer(
-        f"📢 Отправлено: {d}\n"
-        f"❌ Ошибки: {f}"
-    )
+    if ADMIN_LOG_CHAT_ID:
+        await bot.send_message(
+            ADMIN_LOG_CHAT_ID,
+            f"📤 Реклама разослана\nАдмин: {msg.from_user.id}\nДоставлено: {d}\nОшибки: {f}"
+        )
+
+    await msg.answer(f"📢 Отправлено: {d}\n❌ Ошибки: {f}")
 
 @dp.message_handler(lambda m: m.text == "📊 Статистика рекламы")
 async def stats(msg):
@@ -280,7 +259,7 @@ async def stats(msg):
 async def about(msg):
     await msg.answer(
         "🤖 AI-ассистент\n"
-        "🧠 Память в PostgreSQL\n"
+        "🧠 Память диалога\n"
         "🖼 Генерация изображений\n"
         "📢 Поддерживается рекламой"
     )
@@ -292,6 +271,17 @@ async def chat(msg):
         return
     await msg.answer("⏳ Думаю...")
     await msg.answer(ask_ai(msg.from_user.id, msg.text))
+
+# ========= GLOBAL ERROR LOG =========
+async def on_error(update, exception):
+    if ADMIN_LOG_CHAT_ID:
+        await bot.send_message(
+            ADMIN_LOG_CHAT_ID,
+            f"💥 КРИТИЧЕСКАЯ ОШИБКА БОТА\n{repr(exception)}"
+        )
+    return True
+
+dp.errors_handler()(on_error)
 
 # ========= WEBHOOK =========
 async def on_startup(dp):
