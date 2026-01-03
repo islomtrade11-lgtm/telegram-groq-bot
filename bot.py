@@ -36,7 +36,7 @@ with conn.cursor() as c:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # 👇 НОВОЕ
+    # 👇 НОВОЕ (users)
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -45,7 +45,6 @@ with conn.cursor() as c:
         )
     """)
 
-# ========= DIALOG =========
 def get_dialog(user_id, limit=6):
     with conn.cursor() as c:
         c.execute("""
@@ -118,8 +117,8 @@ dp = Dispatcher(bot)
 
 USERS = set()
 ADMIN_WAITING_AD = set()
-WAITING_IMAGE = set()
 AD_STATS = {"total_ads": 0, "total_delivered": 0, "total_failed": 0}
+WAITING_IMAGE = set()
 
 # ========= KEYBOARDS =========
 keyboard_locked = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -143,6 +142,16 @@ keyboard_admin.add(
     KeyboardButton("📊 Статистика рекламы")
 )
 
+BUTTON_TEXTS = {
+    "🧠 Помощь",
+    "ℹ️ О боте",
+    "🗑 Очистить диалог",
+    "🖼 Создать изображение",
+    "📢 Создать рекламу",
+    "📊 Статистика рекламы",
+    "✅ Проверить подписку",
+}
+
 def get_keyboard(uid):
     return keyboard_admin if uid in ADMIN_IDS else keyboard_user
 
@@ -164,7 +173,7 @@ async def require_subscription(msg):
         return False
     return True
 
-# ========= AI TEXT (БЕЗ ИЗМЕНЕНИЙ) =========
+# ========= AI =========
 def ask_ai(user_id, prompt):
     messages = get_dialog(user_id)
     messages.append({"role": "user", "content": prompt})
@@ -203,7 +212,7 @@ def ask_ai(user_id, prompt):
             )
         return "⚠️ ИИ временно недоступен"
 
-# ========= IMAGE API =========
+# ========= IMAGE =========
 def generate_image(prompt):
     r = requests.post(
         "https://api.deepai.org/api/text2img",
@@ -222,7 +231,7 @@ async def start(msg):
     await msg.answer("👋 Добро пожаловать!", reply_markup=get_keyboard(msg.from_user.id))
 
 @dp.message_handler(lambda m: m.text == "🖼 Создать изображение")
-async def image_button(msg):
+async def image_btn(msg):
     ok, left = can_generate_image(msg.from_user.id)
     if not ok:
         await msg.answer("❌ Лимит 3 изображения в день исчерпан")
@@ -240,7 +249,7 @@ async def image_prompt(msg):
         return
     await msg.answer_photo(url)
 
-# ========= ОСТАЛЬНОЕ — 1 В 1 =========
+# ======= СТАРЫЕ ХЕНДЛЕРЫ (1 В 1) =======
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
     clear_dialog(msg.from_user.id)
@@ -252,7 +261,10 @@ async def help_msg(msg):
 
 @dp.message_handler()
 async def chat(msg):
-    if msg.from_user.id in WAITING_IMAGE:
+    if msg.text in BUTTON_TEXTS or msg.from_user.id in WAITING_IMAGE:
+        return
+    USERS.add(msg.from_user.id)
+    if not await require_subscription(msg):
         return
     await msg.answer("⏳ Думаю...")
     await msg.answer(ask_ai(msg.from_user.id, msg.text))
@@ -274,3 +286,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
