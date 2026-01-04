@@ -143,7 +143,7 @@ def ask_ai(user_id, prompt):
                 "Content-Type": "application/json"
             },
             json={
-                "model": "llama-3.1-70b-versatile",
+                "model": "llama-3.2-70b",
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 800
@@ -296,6 +296,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
