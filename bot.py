@@ -96,7 +96,6 @@ keyboard_locked.add(KeyboardButton("✅ Проверить подписку"))
 keyboard_user = ReplyKeyboardMarkup(resize_keyboard=True)
 keyboard_user.add(
     KeyboardButton("🧠 Помощь"),
-    KeyboardButton("ℹ️ О боте"),
     KeyboardButton("🗑 Очистить диалог"),
     KeyboardButton("🖼 Создать изображение")
 )
@@ -104,7 +103,6 @@ keyboard_user.add(
 keyboard_admin = ReplyKeyboardMarkup(resize_keyboard=True)
 keyboard_admin.add(
     KeyboardButton("🧠 Помощь"),
-    KeyboardButton("ℹ️ О боте"),
     KeyboardButton("🗑 Очистить диалог"),
     KeyboardButton("🖼 Создать изображение"),
     KeyboardButton("📢 Создать рекламу"),
@@ -255,15 +253,6 @@ async def stats(msg):
         f"👥 Пользователей: {len(USERS)}"
     )
 
-@dp.message_handler(lambda m: m.text == "ℹ️ О боте")
-async def about(msg):
-    await msg.answer(
-        "🤖 AI-ассистент\n"
-        "🧠 Память диалога\n"
-        "🖼 Генерация изображений\n"
-        "📢 Поддерживается рекламой"
-    )
-
 @dp.message_handler()
 async def chat(msg):
     USERS.add(msg.from_user.id)
@@ -300,4 +289,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
