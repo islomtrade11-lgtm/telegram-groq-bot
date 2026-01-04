@@ -182,7 +182,13 @@ async def start(msg):
             f"👤 Новый пользователь\nID: {msg.from_user.id}\n@{msg.from_user.username}"
         )
 
-    await msg.answer("👋 Добро пожаловать!", reply_markup=get_keyboard(msg.from_user.id))
+    await msg.answer(
+    "👋 Добро пожаловать!\n\n"
+    "📄 Инструкция и описание бота:\n"
+    "https://telegra.ph/Nora-AI-01-04\n\n",
+    reply_markup=get_keyboard(msg.from_user.id)
+)
+
 
 @dp.message_handler(lambda m: m.text == "🖼 Создать изображение")
 async def image_btn(msg):
@@ -289,5 +295,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
