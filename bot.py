@@ -185,10 +185,11 @@ async def start(msg):
     await msg.answer(
     "👋 Добро пожаловать!\n\n"
     "📄 Инструкция и описание бота:\n"
-    "https://telegra.ph/Nora-AI-01-04\n\n",
-    reply_markup=get_keyboard(msg.from_user.id)
+    "https://telegra.ph/Nora-AI-01-04\n\n"
+    "Готов к работе 👇",
+    reply_markup=get_keyboard(msg.from_user.id),
+    disable_web_page_preview=True
 )
-
 
 @dp.message_handler(lambda m: m.text == "🖼 Создать изображение")
 async def image_btn(msg):
@@ -295,6 +296,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
