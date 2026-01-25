@@ -290,7 +290,8 @@ async def admin_db_stats(msg):
     )
 
     await msg.answer(text, reply_markup=db_inline_kb())
-    @dp.callback_query_handler(lambda c: c.data == "db_clear")
+    
+@dp.callback_query_handler(lambda c: c.data == "db_clear")
 async def db_clear_ask_confirm(call):
     if call.from_user.id not in ADMIN_IDS:
         await call.answer("Нет доступа", show_alert=True)
@@ -442,6 +443,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
