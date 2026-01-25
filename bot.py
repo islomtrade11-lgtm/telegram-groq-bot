@@ -440,7 +440,14 @@ async def image_btn(msg):
 @dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE)
 async def image_prompt(msg):
     WAITING_IMAGE.discard(msg.from_user.id)
-    await msg.answer_photo(generate_image(msg.text))
+
+    try:
+        await msg.answer_photo(generate_image(msg.text))
+    except Exception:
+        await msg.answer(
+            "⚠️ Сейчас не получилось создать изображение.\n"
+            "Попробуйте ещё раз или измените запрос (например: «реалистично», «аниме», «логотип»)."
+        )
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -643,6 +650,10 @@ async def chat(msg):
 
 # ========= GLOBAL ERROR LOG =========
 async def on_error(update, exception):
+    # не логируем ошибки генерации картинок (это не поломка бота)
+    if "InvalidHTTPUrlContent" in repr(exception):
+        return True
+
     if ADMIN_LOG_CHAT_ID:
         await bot.send_message(
             ADMIN_LOG_CHAT_ID,
@@ -669,4 +680,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
