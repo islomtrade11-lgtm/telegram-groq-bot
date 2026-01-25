@@ -15,9 +15,11 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # ========= DB SETTINGS =========
-DIALOG_LIMIT = int(os.getenv("DIALOG_LIMIT", "6"))          # сколько сообщений хранить на пользователя
+DIALOG_LIMIT = int(os.getenv("DIALOG_LIMIT", "40"))          # сколько сообщений хранить на пользователя
 DIALOG_TTL_DAYS = int(os.getenv("DIALOG_TTL_DAYS", "30"))   # удалять старше N дней (0 = выключить)
 DB_LIMIT_MB = float(os.getenv("DB_LIMIT_MB", "512"))        # для процентов (Neon Free ~512MB)
+SUMMARY_TRIGGER = int(os.getenv("SUMMARY_TRIGGER", "18"))  # когда делать summary (если сообщений стало больше)
+SUMMARY_KEEP_LAST = int(os.getenv("SUMMARY_KEEP_LAST", "8"))  # сколько последних сообщений оставлять поверх summary
 
 # ========= ADMINS =========
 ADMIN_LOG_CHAT_ID = int(os.getenv("ADMIN_LOG_CHAT_ID", "0"))
@@ -41,6 +43,14 @@ with conn.cursor() as c:
         )
     """)
     
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS dialog_summary (
+            user_id BIGINT PRIMARY KEY,
+            summary TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     c.execute("""
         CREATE INDEX IF NOT EXISTS idx_dialog_user_id_id
         ON dialog_messages (user_id, id DESC)
@@ -90,6 +100,23 @@ def save_message(user_id, role, content):
             (user_id, role, content)
         )
     cleanup_dialog(user_id)
+
+def get_summary(user_id: int) -> str:
+    with conn.cursor() as c:
+        c.execute("SELECT summary FROM dialog_summary WHERE user_id=%s", (user_id,))
+        row = c.fetchone()
+        return row[0] if row and row[0] else ""
+
+
+def save_summary(user_id: int, summary: str):
+    with conn.cursor() as c:
+        c.execute("""
+            INSERT INTO dialog_summary (user_id, summary, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (user_id)
+            DO UPDATE SET summary=EXCLUDED.summary, updated_at=NOW()
+        """, (user_id, summary))
+
 
 def clear_dialog(user_id):
     with conn.cursor() as c:
@@ -196,8 +223,38 @@ async def require_subscription(msg):
 # ========= AI =========
 def ask_ai(user_id, prompt):
     cleanup_dialog(user_id)
-    messages = get_dialog(user_id)
+
+    # 1) берём summary + последние сообщения
+    summary = get_summary(user_id)
+    dialog = get_dialog(user_id)
+
+    # 2) если диалог стал слишком большим — обновляем summary
+    # (берём более широкий кусок, чем SUMMARY_KEEP_LAST)
+    if len(dialog) >= SUMMARY_TRIGGER:
+        try:
+            old_summary = summary
+            new_summary = make_summary_with_ai(user_id, dialog, old_summary)
+            save_summary(user_id, new_summary)
+
+            # после summary оставляем только последние SUMMARY_KEEP_LAST сообщений
+            dialog = dialog[-SUMMARY_KEEP_LAST:]
+            summary = new_summary
+        except:
+            # если summary не получилось — просто продолжаем без него
+            pass
+
+    # 3) собираем финальный контекст для ИИ
+    messages = []
+
+    if summary.strip():
+        messages.append({
+            "role": "system",
+            "content": f"Память диалога (summary): {summary}"
+        })
+
+    messages.extend(dialog)
     messages.append({"role": "user", "content": prompt})
+
 
     try:
         r = requests.post(
@@ -232,6 +289,49 @@ def ask_ai(user_id, prompt):
                 )
             )
         return "⚠️ ИИ временно недоступен"
+
+def make_summary_with_ai(user_id: int, dialog: list, old_summary: str) -> str:
+    """
+    dialog: список [{"role": "...", "content": "..."}]
+    old_summary: старое summary (может быть пустым)
+    """
+    system_text = (
+        "Ты делаешь краткую память диалога для помощника.\n"
+        "Сохрани только важное:\n"
+        "- факты о пользователе\n"
+        "- цели/задачи\n"
+        "- важные решения/договоренности\n"
+        "- предпочтения (язык, формат)\n"
+        "Не добавляй лишний текст.\n"
+        "Ответ только чистым текстом (без списков если можно).\n"
+        "Максимум 800 символов."
+    )
+
+    messages = [{"role": "system", "content": system_text}]
+    if old_summary.strip():
+        messages.append({"role": "user", "content": f"Текущее summary:\n{old_summary}"})
+
+    messages.append({"role": "user", "content": f"Обнови summary по новым сообщениям:\n{dialog}"})
+
+    r = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 250
+        },
+        timeout=40
+    )
+
+    if r.status_code != 200:
+        raise RuntimeError(r.text)
+
+    return r.json()["choices"][0]["message"]["content"].strip()
 
 # ========= HANDLERS =========
 @dp.message_handler(commands=["start"])
@@ -443,6 +543,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
