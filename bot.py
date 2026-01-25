@@ -140,20 +140,27 @@ def build_image_prompt(user_prompt: str) -> str:
     # общий “усилитель” качества
     quality = (
         "masterpiece, best quality, high detail, sharp focus, 4k, ultra realistic lighting, "
-        "clean composition, cinematic, natural colors"
+        "clean composition, cinematic, natural colors, empty bottom area, clean background"
+
     )
 
     # негативный промпт (убираем мусор)
     negative = (
-        "bad quality, lowres, blurry, pixelated, deformed, distorted, ugly, "
-        "extra fingers, bad hands, bad anatomy, disfigured face, "
-        "text, watermark, logo, caption, signature, frame"
+    "bad quality, lowres, blurry, pixelated, deformed, distorted, ugly, "
+    "extra fingers, bad hands, bad anatomy, disfigured face, "
+    "text, watermark, logo, caption, signature, frame, "
+    "letters, typography, brand name, stamp, overlay"
     )
 
     # стиль по умолчанию (реалистичный)
     style = "professional photo"
 
-    final = f"{style}, {user_prompt}, {quality}. Negative prompt: {negative}."
+    final = (
+    "NEW REQUEST. IGNORE ALL PREVIOUS PROMPTS. "
+    f"no watermark, no text, no logo, {style}, {user_prompt}, {quality}. "
+    f"Negative prompt: {negative}."
+    )
+
     return final[:900]  # ограничим длину, чтобы генератор не тупил
 
 
@@ -662,3 +669,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
