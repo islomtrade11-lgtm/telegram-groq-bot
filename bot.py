@@ -4,7 +4,7 @@ import psycopg2
 import asyncio
 from urllib.parse import quote
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.executor import start_webhook
 
 # ========= ENV =========
@@ -14,6 +14,12 @@ WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# ========= DB SETTINGS =========
+DIALOG_LIMIT = int(os.getenv("DIALOG_LIMIT", "6"))          # сколько сообщений хранить на пользователя
+DIALOG_TTL_DAYS = int(os.getenv("DIALOG_TTL_DAYS", "30"))   # удалять старше N дней (0 = выключить)
+DB_LIMIT_MB = float(os.getenv("DB_LIMIT_MB", "512"))        # для процентов (Neon Free ~512MB)
+
+# ========= ADMINS =========
 ADMIN_LOG_CHAT_ID = int(os.getenv("ADMIN_LOG_CHAT_ID", "0"))
 ADMIN_IDS = {
     int(x) for x in os.getenv("ADMIN_IDS", "").split(",")
@@ -34,9 +40,39 @@ with conn.cursor() as c:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_dialog_user_id_id
+        ON dialog_messages (user_id, id DESC)
+    """)
 
 # ========= DIALOG =========
-def get_dialog(user_id, limit=6):
+def cleanup_dialog(user_id: int):
+    """Оставляем только последние DIALOG_LIMIT + удаляем старше TTL."""
+    with conn.cursor() as c:
+        # лимит по количеству (оставляем последние DIALOG_LIMIT)
+        c.execute("""
+            DELETE FROM dialog_messages
+            WHERE user_id=%s AND id NOT IN (
+                SELECT id FROM dialog_messages
+                WHERE user_id=%s
+                ORDER BY id DESC
+                LIMIT %s
+            )
+        """, (user_id, user_id, DIALOG_LIMIT))
+
+        # генеральная чистка по времени
+        if DIALOG_TTL_DAYS > 0:
+            c.execute("""
+                DELETE FROM dialog_messages
+                WHERE user_id=%s
+                  AND created_at < NOW() - (%s || ' days')::interval
+            """, (user_id, DIALOG_TTL_DAYS))
+
+def get_dialog(user_id, limit=None):
+    if limit is None:
+        limit = DIALOG_LIMIT
+
     with conn.cursor() as c:
         c.execute("""
             SELECT role, content FROM dialog_messages
@@ -53,15 +89,7 @@ def save_message(user_id, role, content):
             "INSERT INTO dialog_messages (user_id, role, content) VALUES (%s,%s,%s)",
             (user_id, role, content)
         )
-        c.execute("""
-            DELETE FROM dialog_messages
-            WHERE id NOT IN (
-                SELECT id FROM dialog_messages
-                WHERE user_id=%s
-                ORDER BY id DESC
-                LIMIT 6
-            ) AND user_id=%s
-        """, (user_id, user_id))
+    cleanup_dialog(user_id)
 
 def clear_dialog(user_id):
     with conn.cursor() as c:
@@ -106,11 +134,46 @@ keyboard_admin.add(
     KeyboardButton("🗑 Очистить диалог"),
     KeyboardButton("🖼 Создать изображение"),
     KeyboardButton("📢 Создать рекламу"),
-    KeyboardButton("📊 Статистика рекламы")
+    KeyboardButton("📊 Статистика рекламы"),
+    KeyboardButton("📊 База данных")
 )
 
 def get_keyboard(uid):
     return keyboard_admin if uid in ADMIN_IDS else keyboard_user
+    
+# ========= DB ADMIN PANEL =========
+def get_db_stats():
+    """
+    rows_count, users_count, used_mb, used_percent
+    """
+    with conn.cursor() as c:
+        c.execute("SELECT COUNT(*) FROM dialog_messages;")
+        rows_count = int(c.fetchone()[0])
+
+        c.execute("SELECT COUNT(DISTINCT user_id) FROM dialog_messages;")
+        users_count = int(c.fetchone()[0])
+
+        c.execute("SELECT pg_total_relation_size('dialog_messages');")
+        size_bytes = int(c.fetchone()[0])
+
+    used_mb = size_bytes / (1024 * 1024)
+    used_percent = (used_mb / DB_LIMIT_MB) * 100 if DB_LIMIT_MB > 0 else 0.0
+    return rows_count, users_count, used_mb, used_percent
+
+
+def db_inline_kb():
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🧹 Очистить базу", callback_data="db_clear"))
+    return kb
+
+
+def db_confirm_kb():
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("✅ Да, очистить", callback_data="db_clear_confirm"),
+        InlineKeyboardButton("❌ Отмена", callback_data="db_clear_cancel")
+    )
+    return kb
 
 # ========= SUBSCRIPTION =========
 async def is_subscribed(uid):
@@ -132,6 +195,7 @@ async def require_subscription(msg):
 
 # ========= AI =========
 def ask_ai(user_id, prompt):
+    cleanup_dialog(user_id)
     messages = get_dialog(user_id)
     messages.append({"role": "user", "content": prompt})
 
@@ -209,6 +273,88 @@ async def clear(msg):
 @dp.message_handler(lambda m: m.text == "🧠 Помощь")
 async def help_msg(msg):
     await msg.answer("Просто напишите вопрос 👌")
+    
+    @dp.message_handler(lambda m: m.text == "📊 База данных")
+async def admin_db_stats(msg):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+
+    rows_count, users_count, used_mb, used_percent = get_db_stats()
+
+    text = (
+        "📊 База данных\n\n"
+        f"🧾 Сообщений в истории: {rows_count}\n"
+        f"👥 Пользователей с историей: {users_count}\n"
+        f"📦 Заполнено: {used_percent:.2f}% ({used_mb:.2f}MB из {DB_LIMIT_MB:.0f}MB)\n\n"
+        "Нажмите кнопку ниже, чтобы очистить историю чатов."
+    )
+
+    await msg.answer(text, reply_markup=db_inline_kb())
+    @dp.callback_query_handler(lambda c: c.data == "db_clear")
+async def db_clear_ask_confirm(call):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    await call.message.edit_text(
+        "⚠️ Вы уверены?\n\n"
+        "Это удалит всю историю чатов.\n"
+        "Действие нельзя отменить.",
+        reply_markup=db_confirm_kb()
+    )
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "db_clear_cancel")
+async def db_clear_cancel(call):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    rows_count, users_count, used_mb, used_percent = get_db_stats()
+
+    text = (
+        "📊 База данных\n\n"
+        f"🧾 Сообщений в истории: {rows_count}\n"
+        f"👥 Пользователей с историей: {users_count}\n"
+        f"📦 Заполнено: {used_percent:.2f}% ({used_mb:.2f}MB из {DB_LIMIT_MB:.0f}MB)\n\n"
+        "Очистка отменена ✅"
+    )
+
+    await call.message.edit_text(text, reply_markup=db_inline_kb())
+    await call.answer("Отменено ✅")
+
+
+@dp.callback_query_handler(lambda c: c.data == "db_clear_confirm")
+async def db_clear_confirm(call):
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    # чистим ТОЛЬКО историю диалогов
+    with conn.cursor() as c:
+        c.execute("TRUNCATE TABLE dialog_messages RESTART IDENTITY;")
+
+    await call.message.edit_text("✅ История чатов очищена.")
+
+    # уведомление пользователям (тем, кто сейчас известен в USERS)
+    notify_text = "🧹 Произошла очистка истории чата. Можете продолжать 🙂"
+
+    ok = 0
+    bad = 0
+    for uid in list(USERS):
+        try:
+            await bot.send_message(uid, notify_text)
+            ok += 1
+        except:
+            bad += 1
+
+    await bot.send_message(
+        call.from_user.id,
+        f"📣 Уведомления отправлены.\n✅ Успешно: {ok}\n⚠️ Не дошло: {bad}"
+    )
+    await call.answer("Готово ✅")
+
+
 
 @dp.message_handler(lambda m: m.text == "📢 Создать рекламу")
 async def create_ad(msg):
@@ -296,6 +442,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
