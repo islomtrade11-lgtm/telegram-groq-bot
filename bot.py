@@ -138,6 +138,10 @@ def clear_dialog(user_id):
 # ========= IMAGE (FREE, NO LIMIT) =========
 import random
 from urllib.parse import quote
+from PIL import Image
+from io import BytesIO
+import requests
+from aiogram import types
 
 def build_image_prompt(user_prompt: str) -> str:
     user_prompt = (user_prompt or "").strip()
@@ -158,12 +162,10 @@ def build_image_prompt(user_prompt: str) -> str:
     if "логотип" in p or "logo" in p:
         style = "minimalist vector logo, flat design, clean lines, centered, modern branding"
         quality = "high quality, clean background, simple geometry, sharp edges"
-        # логотипы почти всегда без людей
         user_prompt += ", no people, no human"
     elif "аниме" in p or "anime" in p:
         style = "anime illustration, cinematic scene, vibrant colors"
         quality = "high quality, sharp focus, detailed, beautiful lighting"
-        # если не просили людей — убираем
         if not wants_people:
             user_prompt += ", landscape, no people, no human"
     else:
@@ -172,16 +174,15 @@ def build_image_prompt(user_prompt: str) -> str:
             "masterpiece, best quality, high detail, sharp focus, ultra realistic lighting, "
             "clean composition, cinematic, natural colors, 4k, clean background, wide angle"
         )
-        # если люди не нужны — запрещаем их
         if not wants_people:
             user_prompt += ", landscape, no people, no human, empty scene"
 
-    # негативный промпт (максимально жёсткий)
+    # негативный промпт (без watermark-слов, как ты просил)
     negative = (
         "bad quality, lowres, blurry, pixelated, noise, jpeg artifacts, "
         "deformed, distorted, ugly, bad anatomy, disfigured face, "
         "extra fingers, bad hands, mutated hands, "
-        "text, watermark, logo, caption, signature, frame, "
+        "text, logo, caption, signature, frame, "
         "letters, typography, brand name, stamp, overlay, "
         "cropped, out of frame, duplicate"
     )
@@ -189,7 +190,6 @@ def build_image_prompt(user_prompt: str) -> str:
     # reset чтобы не тянуло прошлые генерации
     final = (
         "NEW REQUEST. IGNORE ALL PREVIOUS PROMPTS. "
-        "no watermark, no text, no logo. "
         f"{style}, {user_prompt}. {quality}. "
         f"Negative prompt: {negative}."
     )
@@ -203,6 +203,49 @@ def generate_image(prompt: str) -> str:
         return ""
     seed = random.randint(1, 9999999)
     return f"https://image.pollinations.ai/prompt/{quote(better)}?seed={seed}"
+
+
+def remove_bottom_right_watermark(image_bytes: bytes) -> bytes:
+    """
+    Убирает watermark снизу справа, обрезая правый-нижний угол.
+    """
+    img = Image.open(BytesIO(image_bytes)).convert("RGB")
+    w, h = img.size
+
+    cut_w = int(w * 0.18)   # 18% ширины справа
+    cut_h = int(h * 0.12)   # 12% высоты снизу
+
+    new_img = img.crop((0, 0, w - cut_w, h - cut_h))
+
+    out = BytesIO()
+    new_img.save(out, format="JPEG", quality=95)
+    return out.getvalue()
+
+
+async def send_generated_image(msg, user_text: str):
+    """
+    Генерит изображение через Pollinations, скачивает, обрезает watermark и отправляет пользователю.
+    Вызывай внутри своего image_prompt handler.
+    """
+    url = generate_image(user_text)
+
+    if not url:
+        await msg.answer("🖼 Напишите описание подробнее (например: «рассвет в горах, реализм»).")
+        return
+
+    try:
+        r = requests.get(url, timeout=60)
+        if r.status_code != 200:
+            raise RuntimeError("image download failed")
+
+        cleaned = remove_bottom_right_watermark(r.content)
+        await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
+
+    except Exception:
+        await msg.answer(
+            "⏳ Сейчас сервис генерации изображений временно недоступен.\n"
+            "Попробуйте ещё раз через пару секунд или немного измените запрос 🙂"
+        )
 
 # ========= AI ANSWERS BY PHOTO (OCR) =========
 def ocr_image_bytes(image_bytes: bytes) -> str:
@@ -476,22 +519,7 @@ async def image_btn(msg):
 @dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE)
 async def image_prompt(msg):
     WAITING_IMAGE.discard(msg.from_user.id)
-
-    prompt = (msg.text or "").strip()
-    url = generate_image(prompt)
-
-    if not url:
-        await msg.answer("🖼 Напишите описание подробнее (например: «рассвет в горах, реализм»).")
-        return
-
-    try:
-        # отправляем 1 вариант (можешь сделать 2, если хочешь)
-        await msg.answer_photo(url)
-    except Exception:
-        await msg.answer(
-            "⏳ Сейчас сервис генерации изображений временно недоступен.\n"
-            "Попробуйте ещё раз через пару секунд или немного измените запрос 🙂"
-        )
+    await send_generated_image(msg, msg.text)
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -724,6 +752,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
