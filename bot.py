@@ -29,37 +29,48 @@ ADMIN_IDS = {
 }
 
 # ========= DB =========
-conn = psycopg2.connect(DATABASE_URL)
-conn.autocommit = True
+conn = None
 
-with conn.cursor() as c:
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS dialog_messages (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            role TEXT,
-            content TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS dialog_summary (
-            user_id BIGINT PRIMARY KEY,
-            summary TEXT,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+def get_conn():
+    global conn
+    if conn is None or conn.closed != 0:
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
+        conn.autocommit = True
+    return conn
 
-    c.execute("""
-        CREATE INDEX IF NOT EXISTS idx_dialog_user_id_id
-        ON dialog_messages (user_id, id DESC)
-    """)
+
+def init_db():
+    with get_conn().cursor() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS dialog_messages (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                role TEXT,
+                content TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS dialog_summary (
+                user_id BIGINT PRIMARY KEY,
+                summary TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dialog_user_id_id
+            ON dialog_messages (user_id, id DESC)
+        """)
+
+# вызываем один раз при старте
+init_db()
 
 # ========= DIALOG =========
 def cleanup_dialog(user_id: int):
     """Оставляем только последние DIALOG_LIMIT + удаляем старше TTL."""
-    with conn.cursor() as c:
+    with get_conn().cursor() as c:
         # лимит по количеству (оставляем последние DIALOG_LIMIT)
         c.execute("""
             DELETE FROM dialog_messages
@@ -83,7 +94,7 @@ def get_dialog(user_id, limit=None):
     if limit is None:
         limit = DIALOG_LIMIT
 
-    with conn.cursor() as c:
+    with get_conn().cursor() as c:
         c.execute("""
             SELECT role, content FROM dialog_messages
             WHERE user_id=%s
@@ -94,7 +105,7 @@ def get_dialog(user_id, limit=None):
     return [{"role": r[0], "content": r[1]} for r in rows]
 
 def save_message(user_id, role, content):
-    with conn.cursor() as c:
+    with get_conn().cursor() as c:
         c.execute(
             "INSERT INTO dialog_messages (user_id, role, content) VALUES (%s,%s,%s)",
             (user_id, role, content)
@@ -102,14 +113,14 @@ def save_message(user_id, role, content):
     cleanup_dialog(user_id)
 
 def get_summary(user_id: int) -> str:
-    with conn.cursor() as c:
+    with get_conn().cursor() as c:
         c.execute("SELECT summary FROM dialog_summary WHERE user_id=%s", (user_id,))
         row = c.fetchone()
         return row[0] if row and row[0] else ""
 
 
 def save_summary(user_id: int, summary: str):
-    with conn.cursor() as c:
+    with get_conn().cursor() as c:
         c.execute("""
             INSERT INTO dialog_summary (user_id, summary, updated_at)
             VALUES (%s, %s, NOW())
@@ -119,7 +130,7 @@ def save_summary(user_id: int, summary: str):
 
 
 def clear_dialog(user_id):
-    with conn.cursor() as c:
+    with get_conn().cursor() as c:
         c.execute("DELETE FROM dialog_messages WHERE user_id=%s", (user_id,))
 
 # ========= IMAGE (FREE, NO LIMIT) =========
@@ -543,6 +554,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
