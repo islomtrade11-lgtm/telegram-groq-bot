@@ -2,6 +2,7 @@ import os
 import requests
 import psycopg2
 import asyncio
+from io import BytesIO
 from urllib.parse import quote
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
@@ -138,29 +139,35 @@ def clear_dialog(user_id):
 def generate_image(prompt):
     return f"https://image.pollinations.ai/prompt/{quote(prompt)}"
 
-def ocr_image_url(image_url: str) -> str:
+def ocr_image_bytes(image_bytes: bytes) -> str:
     if not OCR_API_KEY:
         return ""
 
+    files = {
+        "filename": ("image.jpg", image_bytes)
+    }
+
+    data = {
+        "apikey": OCR_API_KEY,
+        "language": "rus",  # можно поменять на "eng" если часто английский
+        "isOverlayRequired": False
+    }
+
     r = requests.post(
         "https://api.ocr.space/parse/image",
-        data={
-            "apikey": OCR_API_KEY,
-            "url": image_url,
-            "language": "rus",
-            "isOverlayRequired": False
-        },
+        files=files,
+        data=data,
         timeout=60
     )
 
     if r.status_code != 200:
         return ""
 
-    data = r.json()
-    if data.get("IsErroredOnProcessing"):
+    j = r.json()
+    if j.get("IsErroredOnProcessing"):
         return ""
 
-    parsed = data.get("ParsedResults", [])
+    parsed = j.get("ParsedResults", [])
     if not parsed:
         return ""
 
@@ -549,35 +556,40 @@ async def stats(msg):
 
 @dp.message_handler(content_types=types.ContentTypes.PHOTO)
 async def photo_auto(msg: types.Message):
-    # caption = текст задания под фото
     caption = (msg.caption or "").strip()
 
     try:
-        # ссылка на фото из Telegram
+        # берём самое большое фото
         photo = msg.photo[-1]
         file = await bot.get_file(photo.file_id)
-        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
 
         # если нет подписи — спросим что делать
         if not caption:
-            await msg.answer("📷 Фото получил ✅\nНапишите, что нужно сделать с этим фото (например: «считай текст», «переведи», «сделай письмо»).")
+            await msg.answer(
+                "📷 Фото получил ✅\n"
+                "Напишите, что нужно сделать с этим фото (например: «считай текст», «переведи», «сделай письмо»)."
+            )
             return
 
         await msg.answer("🔎 Обрабатываю фото...")
 
-        ocr_text = ocr_image_url(file_url)
+        # ✅ СКАЧИВАЕМ ФОТО В БАЙТЫ (а не через ссылку)
+        downloaded = await bot.download_file(file.file_path)
+        image_bytes = downloaded.read()
+
+        # ✅ OCR напрямую байтами
+        ocr_text = ocr_image_bytes(image_bytes)
 
         # если OCR ничего не нашёл — всё равно дадим ответ “по общему описанию”
         if not ocr_text:
             prompt = (
                 "Пользователь отправил фото, но текст распознать не удалось.\n"
                 f"Задание пользователя: {caption}\n"
-                "Ответь максимально полезно и попроси прислать фото четче, если нужен текст."
+                "Ответь максимально полезно. Если нужен текст с фото — попроси прислать фото четче/крупнее."
             )
             await msg.answer(ask_ai(msg.from_user.id, prompt))
             return
 
-        # собираем задачу: caption + распознанный текст
         prompt = (
             f"Задание пользователя по фото: {caption}\n\n"
             "Текст с изображения (OCR):\n"
@@ -586,7 +598,9 @@ async def photo_auto(msg: types.Message):
 
         await msg.answer(ask_ai(msg.from_user.id, prompt))
 
-    except Exception:
+    except Exception as e:
+        # если хочешь увидеть причину в логах:
+        # print("PHOTO ERROR:", repr(e))
         await msg.answer("⚠️ Не смог обработать фото. Попробуйте отправить ещё раз (крупнее/четче).")
 
 @dp.message_handler()
@@ -625,6 +639,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
