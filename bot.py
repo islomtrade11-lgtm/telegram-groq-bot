@@ -43,7 +43,7 @@ with conn.cursor() as c:
         )
     """)
     
-        c.execute("""
+    c.execute("""
         CREATE TABLE IF NOT EXISTS dialog_summary (
             user_id BIGINT PRIMARY KEY,
             summary TEXT,
@@ -543,6 +543,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
