@@ -516,10 +516,18 @@ async def image_btn(msg):
     WAITING_IMAGE.add(msg.from_user.id)
     await msg.answer("🖼 Напишите описание изображения")
 
-@dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE)
+@dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE, content_types=types.ContentTypes.TEXT)
 async def image_prompt(msg):
+    text = (msg.text or "").strip()
+
+    # если человек передумал и написал обычное слово — выходим из режима картинки
+    if len(text) < 5:
+        WAITING_IMAGE.discard(msg.from_user.id)
+        await msg.answer("Ок 🙂 Режим создания изображения отменён.")
+        return
+
     WAITING_IMAGE.discard(msg.from_user.id)
-    await send_generated_image(msg, msg.text)
+    await send_generated_image(msg, text)
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -752,6 +760,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
