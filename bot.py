@@ -136,9 +136,32 @@ def clear_dialog(user_id):
         c.execute("DELETE FROM dialog_messages WHERE user_id=%s", (user_id,))
 
 # ========= IMAGE (FREE, NO LIMIT) =========
-def generate_image(prompt):
-    return f"https://image.pollinations.ai/prompt/{quote(prompt)}"
+def build_image_prompt(user_prompt: str) -> str:
+    # общий “усилитель” качества
+    quality = (
+        "masterpiece, best quality, high detail, sharp focus, 4k, ultra realistic lighting, "
+        "clean composition, cinematic, natural colors"
+    )
 
+    # негативный промпт (убираем мусор)
+    negative = (
+        "bad quality, lowres, blurry, pixelated, deformed, distorted, ugly, "
+        "extra fingers, bad hands, bad anatomy, disfigured face, "
+        "text, watermark, logo, caption, signature, frame"
+    )
+
+    # стиль по умолчанию (реалистичный)
+    style = "professional photo"
+
+    final = f"{style}, {user_prompt}, {quality}. Negative prompt: {negative}."
+    return final[:900]  # ограничим длину, чтобы генератор не тупил
+
+
+def generate_image(prompt: str):
+    better_prompt = build_image_prompt(prompt)
+    return f"https://image.pollinations.ai/prompt/{quote(better_prompt)}"
+
+# ========= AI ANSWERS BY PHOTO (OCR) =========
 def ocr_image_bytes(image_bytes: bytes) -> str:
     if not OCR_API_KEY:
         return ""
@@ -639,17 +662,3 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
