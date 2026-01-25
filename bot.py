@@ -274,7 +274,7 @@ async def clear(msg):
 async def help_msg(msg):
     await msg.answer("Просто напишите вопрос 👌")
     
-    @dp.message_handler(lambda m: m.text == "📊 База данных")
+@dp.message_handler(lambda m: m.text == "📊 База данных")
 async def admin_db_stats(msg):
     if msg.from_user.id not in ADMIN_IDS:
         return
@@ -442,6 +442,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
