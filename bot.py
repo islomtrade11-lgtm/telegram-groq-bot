@@ -13,6 +13,7 @@ CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
+OCR_API_KEY = os.getenv("OCR_API_KEY")
 
 # ========= DB SETTINGS =========
 DIALOG_LIMIT = int(os.getenv("DIALOG_LIMIT", "40"))          # сколько сообщений хранить на пользователя
@@ -136,6 +137,34 @@ def clear_dialog(user_id):
 # ========= IMAGE (FREE, NO LIMIT) =========
 def generate_image(prompt):
     return f"https://image.pollinations.ai/prompt/{quote(prompt)}"
+
+def ocr_image_url(image_url: str) -> str:
+    if not OCR_API_KEY:
+        return ""
+
+    r = requests.post(
+        "https://api.ocr.space/parse/image",
+        data={
+            "apikey": OCR_API_KEY,
+            "url": image_url,
+            "language": "rus",
+            "isOverlayRequired": False
+        },
+        timeout=60
+    )
+
+    if r.status_code != 200:
+        return ""
+
+    data = r.json()
+    if data.get("IsErroredOnProcessing"):
+        return ""
+
+    parsed = data.get("ParsedResults", [])
+    if not parsed:
+        return ""
+
+    return parsed[0].get("ParsedText", "").strip()
 
 # ========= BOT =========
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
@@ -518,6 +547,48 @@ async def stats(msg):
         f"👥 Пользователей: {len(USERS)}"
     )
 
+@dp.message_handler(content_types=types.ContentTypes.PHOTO)
+async def photo_auto(msg: types.Message):
+    # caption = текст задания под фото
+    caption = (msg.caption or "").strip()
+
+    try:
+        # ссылка на фото из Telegram
+        photo = msg.photo[-1]
+        file = await bot.get_file(photo.file_id)
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+
+        # если нет подписи — спросим что делать
+        if not caption:
+            await msg.answer("📷 Фото получил ✅\nНапишите, что нужно сделать с этим фото (например: «считай текст», «переведи», «сделай письмо»).")
+            return
+
+        await msg.answer("🔎 Обрабатываю фото...")
+
+        ocr_text = ocr_image_url(file_url)
+
+        # если OCR ничего не нашёл — всё равно дадим ответ “по общему описанию”
+        if not ocr_text:
+            prompt = (
+                "Пользователь отправил фото, но текст распознать не удалось.\n"
+                f"Задание пользователя: {caption}\n"
+                "Ответь максимально полезно и попроси прислать фото четче, если нужен текст."
+            )
+            await msg.answer(ask_ai(msg.from_user.id, prompt))
+            return
+
+        # собираем задачу: caption + распознанный текст
+        prompt = (
+            f"Задание пользователя по фото: {caption}\n\n"
+            "Текст с изображения (OCR):\n"
+            f"{ocr_text}"
+        )
+
+        await msg.answer(ask_ai(msg.from_user.id, prompt))
+
+    except Exception:
+        await msg.answer("⚠️ Не смог обработать фото. Попробуйте отправить ещё раз (крупнее/четче).")
+
 @dp.message_handler()
 async def chat(msg):
     USERS.add(msg.from_user.id)
@@ -554,6 +625,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
