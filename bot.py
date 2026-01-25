@@ -136,37 +136,73 @@ def clear_dialog(user_id):
         c.execute("DELETE FROM dialog_messages WHERE user_id=%s", (user_id,))
 
 # ========= IMAGE (FREE, NO LIMIT) =========
+import random
+from urllib.parse import quote
+
 def build_image_prompt(user_prompt: str) -> str:
-    # общий “усилитель” качества
-    quality = (
-        "masterpiece, best quality, high detail, sharp focus, 4k, ultra realistic lighting, "
-        "clean composition, cinematic, natural colors, empty bottom area, clean background"
+    user_prompt = (user_prompt or "").strip()
 
-    )
+    # защита от мусора
+    if len(user_prompt) < 5:
+        return ""
 
-    # негативный промпт (убираем мусор)
+    p = user_prompt.lower()
+
+    # определяем, хочет ли пользователь людей
+    wants_people = any(word in p for word in [
+        "дев", "девуш", "жен", "пар", "муж", "человек", "люди", "лицо", "портрет",
+        "girl", "woman", "man", "person", "people", "face", "portrait"
+    ])
+
+    # авто-стили
+    if "логотип" in p or "logo" in p:
+        style = "minimalist vector logo, flat design, clean lines, centered, modern branding"
+        quality = "high quality, clean background, simple geometry, sharp edges"
+        # логотипы почти всегда без людей
+        user_prompt += ", no people, no human"
+    elif "аниме" in p or "anime" in p:
+        style = "anime illustration, cinematic scene, vibrant colors"
+        quality = "high quality, sharp focus, detailed, beautiful lighting"
+        # если не просили людей — убираем
+        if not wants_people:
+            user_prompt += ", landscape, no people, no human"
+    else:
+        style = "professional photo"
+        quality = (
+            "masterpiece, best quality, high detail, sharp focus, ultra realistic lighting, "
+            "clean composition, cinematic, natural colors, 4k, clean background, wide angle"
+        )
+        # если люди не нужны — запрещаем их
+        if not wants_people:
+            user_prompt += ", landscape, no people, no human, empty scene"
+
+    # негативный промпт (максимально жёсткий)
     negative = (
-    "bad quality, lowres, blurry, pixelated, deformed, distorted, ugly, "
-    "extra fingers, bad hands, bad anatomy, disfigured face, "
-    "text, watermark, logo, caption, signature, frame, "
-    "letters, typography, brand name, stamp, overlay"
+        "bad quality, lowres, blurry, pixelated, noise, jpeg artifacts, "
+        "deformed, distorted, ugly, bad anatomy, disfigured face, "
+        "extra fingers, bad hands, mutated hands, "
+        "text, watermark, logo, caption, signature, frame, "
+        "letters, typography, brand name, stamp, overlay, "
+        "cropped, out of frame, duplicate"
     )
 
-    # стиль по умолчанию (реалистичный)
-    style = "professional photo"
-
+    # reset чтобы не тянуло прошлые генерации
     final = (
-    "NEW REQUEST. IGNORE ALL PREVIOUS PROMPTS. "
-    f"no watermark, no text, no logo, {style}, {user_prompt}, {quality}. "
-    f"Negative prompt: {negative}."
+        "NEW REQUEST. IGNORE ALL PREVIOUS PROMPTS. "
+        "no watermark, no text, no logo. "
+        f"{style}, {user_prompt}. {quality}. "
+        f"Negative prompt: {negative}."
     )
 
-    return final[:900]  # ограничим длину, чтобы генератор не тупил
+    return final[:900]
 
 
-def generate_image(prompt: str):
-    better_prompt = build_image_prompt(prompt)
-    return f"https://image.pollinations.ai/prompt/{quote(better_prompt)}"
+def generate_image(prompt: str) -> str:
+    better = build_image_prompt(prompt)
+    if not better:
+        return ""
+    seed = random.randint(1, 9999999)
+    return f"https://image.pollinations.ai/prompt/{quote(better)}?seed={seed}"
 
 # ========= AI ANSWERS BY PHOTO (OCR) =========
 def ocr_image_bytes(image_bytes: bytes) -> str:
@@ -441,12 +477,20 @@ async def image_btn(msg):
 async def image_prompt(msg):
     WAITING_IMAGE.discard(msg.from_user.id)
 
+    prompt = (msg.text or "").strip()
+    url = generate_image(prompt)
+
+    if not url:
+        await msg.answer("🖼 Напишите описание подробнее (например: «рассвет в горах, реализм»).")
+        return
+
     try:
-        await msg.answer_photo(generate_image(msg.text))
+        # отправляем 1 вариант (можешь сделать 2, если хочешь)
+        await msg.answer_photo(url)
     except Exception:
         await msg.answer(
-            "⚠️ Сейчас не получилось создать изображение.\n"
-            "Попробуйте ещё раз или измените запрос (например: «реалистично», «аниме», «логотип»)."
+            "⏳ Сейчас сервис генерации изображений временно недоступен.\n"
+            "Попробуйте ещё раз через пару секунд или немного измените запрос 🙂"
         )
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
@@ -680,5 +724,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
