@@ -192,6 +192,24 @@ def remove_bottom_right_watermark(image_bytes: bytes) -> bytes:
     new_img.save(out, format="JPEG", quality=95)
     return out.getvalue()
 
+def is_rate_limit_image(image_bytes: bytes) -> bool:
+    try:
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+        w, h = img.size
+
+        # если совсем маленькая/битая — не она
+        if w < 200 or h < 200:
+            return False
+
+        # проверяем верхнюю область (там обычно "RATE LIMIT REACHED" и светлый фон)
+        px = img.getpixel((int(w*0.5), int(h*0.12)))  # пиксель вверху по центру
+        r, g, b = px
+
+        # у заглушки фон бежево-жёлтый, значит R и G высокие
+        return r > 160 and g > 130 and b < 140
+    except:
+        return False
+
 async def send_generated_image(msg, user_text: str):
     prompt = (user_text or "").strip()
 
@@ -213,7 +231,12 @@ async def send_generated_image(msg, user_text: str):
             if r.status_code != 200 or not r.content:
                 continue
 
-            # убираем watermark (у тебя он снизу справа)
+            # ✅ если Pollinations вернул картинку-заглушку с лимитом
+            if is_rate_limit_image(r.content):
+                await msg.answer("🚫 Лимит генерации изображений сейчас исчерпан. Попробуйте через 10–30 минут 🙂")
+                return
+
+            # убираем watermark (снизу справа)
             cleaned = remove_bottom_right_watermark(r.content)
 
             await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
@@ -222,8 +245,8 @@ async def send_generated_image(msg, user_text: str):
         except Exception:
             continue
 
-    # если 3 раза не вышло — просто спокойно пишем пользователю
     await msg.answer("⏳ Генератор сейчас перегружен. Попробуйте ещё раз через 1–2 минуты 🙂")
+
 
 # ========= AI ANSWERS BY PHOTO (OCR) =========
 def ocr_image_bytes(image_bytes: bytes) -> str:
@@ -738,6 +761,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
