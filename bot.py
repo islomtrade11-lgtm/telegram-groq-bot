@@ -148,13 +148,16 @@ def generate_image(prompt: str) -> str:
     if not prompt:
         return ""
 
-    base = f"https://image.pollinations.ai/prompt/{quote(prompt)}"
+    base = f"https://gen.pollinations.ai/image/{quote(prompt)}"
 
-    # если ключ задан — используем его (меньше лимитов/блокировок)
+    params = []
     if POLLINATIONS_API_KEY:
-        return f"{base}?key={quote(POLLINATIONS_API_KEY)}"
+        params.append(f"key={quote(POLLINATIONS_API_KEY)}")
 
-    return base
+    # пробуем убрать watermark официально (если доступно)
+    params.append("nologo=true")
+
+    return base + ("?" + "&".join(params) if params else "")
 
 def is_pollinations_limit_image(image_bytes: bytes) -> bool:
     """
@@ -466,13 +469,16 @@ async def image_prompt(msg: types.Message):
 
     try:
         url = generate_image(msg.text)
+        if not url:
+            await msg.answer("🖼 Напишите описание изображения 🙂")
+            return
 
         r = requests.get(url, timeout=40)
         if r.status_code != 200 or not r.content:
             await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
             return
 
-        # если лимит — не отправляем картинку-заглушку
+        # ✅ если это заглушка лимита — НЕ отправляем её
         if is_pollinations_limit_image(r.content):
             await msg.answer("🚫 Сейчас лимит генерации изображений. Попробуйте позже 🙂")
             return
@@ -482,6 +488,7 @@ async def image_prompt(msg: types.Message):
 
     except Exception:
         await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
+
 
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
@@ -715,6 +722,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
