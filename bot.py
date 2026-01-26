@@ -462,13 +462,13 @@ async def image_btn(msg):
     WAITING_IMAGE.add(msg.from_user.id)
     await msg.answer("🖼 Напишите описание изображения")
 
-from aiogram.dispatcher.handler import async_task
-
 @dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE, content_types=types.ContentTypes.TEXT)
-@async_task
 async def image_prompt(msg: types.Message):
     WAITING_IMAGE.discard(msg.from_user.id)
-    await send_generated_image(msg, msg.text)
+    await msg.answer("🎨 Генерирую изображение...")
+
+    # запуск в фоне, чтобы webhook не висел
+    asyncio.create_task(send_generated_image(msg, msg.text))
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -701,6 +701,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
