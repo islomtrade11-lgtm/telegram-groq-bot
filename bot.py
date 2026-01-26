@@ -173,9 +173,7 @@ async def send_generated_image(msg, user_text: str):
     if len(prompt) < 2:
         await msg.answer("🖼 Напишите описание чуть подробнее 🙂")
         return
-
-    await msg.answer("🎨 Генерирую изображение...")
-
+        
     try:
         url = generate_image(prompt)
         if not url:
@@ -701,6 +699,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
