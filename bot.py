@@ -145,56 +145,27 @@ from aiogram import types
 
 def build_image_prompt(user_prompt: str) -> str:
     user_prompt = (user_prompt or "").strip()
-
-    # защита от мусора
     if len(user_prompt) < 5:
         return ""
 
     p = user_prompt.lower()
-
-    # определяем, хочет ли пользователь людей
     wants_people = any(word in p for word in [
         "дев", "девуш", "жен", "пар", "муж", "человек", "люди", "лицо", "портрет",
         "girl", "woman", "man", "person", "people", "face", "portrait"
     ])
 
-    # авто-стили
-    if "логотип" in p or "logo" in p:
-        style = "minimalist vector logo, flat design, clean lines, centered, modern branding"
-        quality = "high quality, clean background, simple geometry, sharp edges"
-        user_prompt += ", no people, no human"
-    elif "аниме" in p or "anime" in p:
-        style = "anime illustration, cinematic scene, vibrant colors"
-        quality = "high quality, sharp focus, detailed, beautiful lighting"
-        if not wants_people:
-            user_prompt += ", landscape, no people, no human"
-    else:
-        style = "professional photo"
-        quality = (
-            "masterpiece, best quality, high detail, sharp focus, ultra realistic lighting, "
-            "clean composition, cinematic, natural colors, 4k, clean background, wide angle"
-        )
-        if not wants_people:
-            user_prompt += ", landscape, no people, no human, empty scene"
+    # если НЕ просили людей — убираем людей (чтобы не рисовал девушку всегда)
+    if not wants_people:
+        user_prompt += ", landscape, no people"
 
-    # негативный промпт (без watermark-слов, как ты просил)
-    negative = (
-        "bad quality, lowres, blurry, pixelated, noise, jpeg artifacts, "
-        "deformed, distorted, ugly, bad anatomy, disfigured face, "
-        "extra fingers, bad hands, mutated hands, "
-        "text, logo, caption, signature, frame, "
-        "letters, typography, brand name, stamp, overlay, "
-        "cropped, out of frame, duplicate"
-    )
+    # мягкое улучшение качества (без агрессии)
+    quality = "high quality, detailed, sharp focus, realistic lighting, clean composition"
 
-    # reset чтобы не тянуло прошлые генерации
-    final = (
-        "NEW REQUEST. IGNORE ALL PREVIOUS PROMPTS. "
-        f"{style}, {user_prompt}. {quality}. "
-        f"Negative prompt: {negative}."
-    )
+    # лёгкий negative без перегруза
+    negative = "blurry, low quality, deformed, text, logo"
 
-    return final[:900]
+    final = f"{user_prompt}, {quality}. Negative prompt: {negative}."
+    return final[:600]
 
 
 def generate_image(prompt: str) -> str:
@@ -221,31 +192,38 @@ def remove_bottom_right_watermark(image_bytes: bytes) -> bytes:
     new_img.save(out, format="JPEG", quality=95)
     return out.getvalue()
 
-
 async def send_generated_image(msg, user_text: str):
-    """
-    Генерит изображение через Pollinations, скачивает, обрезает watermark и отправляет пользователю.
-    Вызывай внутри своего image_prompt handler.
-    """
-    url = generate_image(user_text)
+    prompt = (user_text or "").strip()
 
-    if not url:
+    if len(prompt) < 5:
         await msg.answer("🖼 Напишите описание подробнее (например: «рассвет в горах, реализм»).")
         return
 
-    try:
-        r = requests.get(url, timeout=60)
-        if r.status_code != 200:
-            raise RuntimeError("image download failed")
+    await msg.answer("🎨 Генерирую изображение...")
 
-        cleaned = remove_bottom_right_watermark(r.content)
-        await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
+    # 3 попытки с разными seed
+    for attempt in range(3):
+        try:
+            url = generate_image(prompt)
+            if not url:
+                await msg.answer("🖼 Напишите описание подробнее.")
+                return
 
-    except Exception:
-        await msg.answer(
-            "⏳ Сейчас сервис генерации изображений временно недоступен.\n"
-            "Попробуйте ещё раз через пару секунд или немного измените запрос 🙂"
-        )
+            r = requests.get(url, timeout=25)
+            if r.status_code != 200 or not r.content:
+                continue
+
+            # убираем watermark (у тебя он снизу справа)
+            cleaned = remove_bottom_right_watermark(r.content)
+
+            await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
+            return
+
+        except Exception:
+            continue
+
+    # если 3 раза не вышло — просто спокойно пишем пользователю
+    await msg.answer("⏳ Генератор сейчас перегружен. Попробуйте ещё раз через 1–2 минуты 🙂")
 
 # ========= AI ANSWERS BY PHOTO (OCR) =========
 def ocr_image_bytes(image_bytes: bytes) -> str:
@@ -760,6 +738,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
