@@ -468,35 +468,33 @@ async def image_prompt(msg: types.Message):
         await msg.answer("🖼 Напишите описание изображения 🙂")
         return
 
-    # 3 попытки
-    for _ in range(3):
-        try:
-            url = generate_image(prompt)
-            r = requests.get(url, timeout=40)
+    url = generate_image(prompt)
 
-            # если сервер не отдал нормальный ответ
-            if r.status_code != 200 or not r.content:
-                continue
+    try:
+        await msg.answer(f"DEBUG: URL\n{url[:200]}...")  # покажет, что реально генерим ссылку
 
-            # ✅ важно: проверяем что это реально картинка
-            ctype = (r.headers.get("Content-Type") or "").lower()
-            if "image" not in ctype:
-                # иногда Pollinations отдаёт текст/ошибку вместо картинки
-                continue
+        r = requests.get(url, timeout=20)
 
-            # если это заглушка лимита — НЕ отправляем
-            if is_pollinations_limit_image(r.content):
-                await msg.answer("🚫 Сейчас лимит генерации изображений. Попробуйте позже 🙂")
-                return
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        await msg.answer(
+            f"DEBUG: status={r.status_code}\n"
+            f"content-type={ctype}\n"
+            f"bytes={len(r.content)}"
+        )
 
-            cleaned = remove_bottom_right_watermark(r.content)
-            await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
+        if r.status_code != 200 or not r.content:
+            await msg.answer("⏳ Генератор не отдал картинку. Попробуйте позже 🙂")
             return
 
-        except Exception:
-            continue
+        if "image" not in ctype:
+            await msg.answer("⛔ Pollinations вернул не картинку (текст/ошибку). Попробуйте позже 🙂")
+            return
 
-    await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
+        cleaned = remove_bottom_right_watermark(r.content)
+        await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
+
+    except Exception as e:
+        await msg.answer(f"DEBUG EXCEPTION:\n{repr(e)}")
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -729,6 +727,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
