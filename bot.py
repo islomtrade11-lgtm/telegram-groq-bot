@@ -273,7 +273,7 @@ def get_db_stats():
     """
     rows_count, users_count, used_mb, used_percent
     """
-    with conn.cursor() as c:
+    with get_conn().cursor() as c:
         c.execute("SELECT COUNT(*) FROM dialog_messages;")
         rows_count = int(c.fetchone()[0])
 
@@ -292,7 +292,6 @@ def db_inline_kb():
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("🧹 Очистить базу", callback_data="db_clear"))
     return kb
-
 
 def db_confirm_kb():
     kb = InlineKeyboardMarkup(row_width=2)
@@ -730,6 +729,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
