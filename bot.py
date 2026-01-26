@@ -15,6 +15,7 @@ WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OCR_API_KEY = os.getenv("OCR_API_KEY")
+POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
 
 # ========= DB SETTINGS =========
 DIALOG_LIMIT = int(os.getenv("DIALOG_LIMIT", "40"))          # сколько сообщений хранить на пользователя
@@ -144,8 +145,16 @@ from aiogram import types
 
 def generate_image(prompt: str) -> str:
     prompt = (prompt or "").strip()
-    return f"https://image.pollinations.ai/prompt/{quote(prompt)}"
+    if not prompt:
+        return ""
 
+    base = f"https://image.pollinations.ai/prompt/{quote(prompt)}"
+
+    # если ключ задан — используем его (меньше лимитов/блокировок)
+    if POLLINATIONS_API_KEY:
+        return f"{base}?key={quote(POLLINATIONS_API_KEY)}"
+
+    return base
 
 def is_pollinations_limit_image(image_bytes: bytes) -> bool:
     """
@@ -706,6 +715,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
