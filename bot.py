@@ -469,7 +469,6 @@ from aiogram.dispatcher.handler import async_task
 async def image_prompt(msg: types.Message):
     WAITING_IMAGE.discard(msg.from_user.id)
     await send_generated_image(msg, msg.text)
-)
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -702,6 +701,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
