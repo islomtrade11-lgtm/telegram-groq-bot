@@ -136,44 +136,17 @@ def clear_dialog(user_id):
         c.execute("DELETE FROM dialog_messages WHERE user_id=%s", (user_id,))
 
 # ========= IMAGE (FREE, NO LIMIT) =========
-import random
 from urllib.parse import quote
 from PIL import Image
 from io import BytesIO
 import requests
 from aiogram import types
 
-def build_image_prompt(user_prompt: str) -> str:
-    user_prompt = (user_prompt or "").strip()
-    if len(user_prompt) < 5:
-        return ""
-
-    p = user_prompt.lower()
-    wants_people = any(word in p for word in [
-        "дев", "девуш", "жен", "пар", "муж", "человек", "люди", "лицо", "портрет",
-        "girl", "woman", "man", "person", "people", "face", "portrait"
-    ])
-
-    # если НЕ просили людей — убираем людей (чтобы не рисовал девушку всегда)
-    if not wants_people:
-        user_prompt += ", landscape, no people"
-
-    # мягкое улучшение качества (без агрессии)
-    quality = "high quality, detailed, sharp focus, realistic lighting, clean composition"
-
-    # лёгкий negative без перегруза
-    negative = "blurry, low quality, deformed, text, logo"
-
-    final = f"{user_prompt}, {quality}. Negative prompt: {negative}."
-    return final[:600]
-
-
 def generate_image(prompt: str) -> str:
-    better = build_image_prompt(prompt)
-    if not better:
+    prompt = (prompt or "").strip()
+    if not prompt:
         return ""
-    seed = random.randint(1, 9999999)
-    return f"https://image.pollinations.ai/prompt/{quote(better)}?seed={seed}"
+    return f"https://image.pollinations.ai/prompt/{quote(prompt)}"
 
 
 def remove_bottom_right_watermark(image_bytes: bytes) -> bytes:
@@ -183,8 +156,9 @@ def remove_bottom_right_watermark(image_bytes: bytes) -> bytes:
     img = Image.open(BytesIO(image_bytes)).convert("RGB")
     w, h = img.size
 
-    cut_w = int(w * 0.18)   # 18% ширины справа
-    cut_h = int(h * 0.12)   # 12% высоты снизу
+    # обрезаем небольшой угол (под watermark)
+    cut_w = int(w * 0.18)   # 18% справа
+    cut_h = int(h * 0.12)   # 12% снизу
 
     new_img = img.crop((0, 0, w - cut_w, h - cut_h))
 
@@ -192,49 +166,32 @@ def remove_bottom_right_watermark(image_bytes: bytes) -> bytes:
     new_img.save(out, format="JPEG", quality=95)
     return out.getvalue()
 
-def is_rate_limit_by_ocr(image_bytes: bytes) -> bool:
-    """
-    100% проверка: если OCR нашёл слова RATE LIMIT REACHED.
-    """
-    try:
-        txt = ocr_image_bytes(image_bytes).lower()
-        return ("rate limit" in txt) or ("rate limit reached" in txt)
-    except:
-        return False
 
 async def send_generated_image(msg, user_text: str):
     prompt = (user_text or "").strip()
 
-    if len(prompt) < 5:
-        await msg.answer("🖼 Напишите описание подробнее (например: «рассвет в горах, реализм»).")
+    if len(prompt) < 2:
+        await msg.answer("🖼 Напишите описание чуть подробнее 🙂")
         return
 
     await msg.answer("🎨 Генерирую изображение...")
 
-    for attempt in range(3):
-        try:
-            url = generate_image(prompt)
-            if not url:
-                await msg.answer("🖼 Напишите описание подробнее.")
-                return
-
-            r = requests.get(url, timeout=25)
-            if r.status_code != 200 or not r.content:
-                continue
-
-            # ✅ 100% проверка через OCR
-            if is_rate_limit_by_ocr(r.content):
-                await msg.answer("🚫 Лимит генерации изображений сейчас исчерпан. Попробуйте через 10–30 минут 🙂")
-                return
-
-            cleaned = remove_bottom_right_watermark(r.content)
-            await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
+    try:
+        url = generate_image(prompt)
+        if not url:
+            await msg.answer("🖼 Напишите описание изображения 🙂")
             return
 
-        except Exception:
-            continue
+        r = requests.get(url, timeout=35)
+        if r.status_code != 200 or not r.content:
+            await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
+            return
 
-    await msg.answer("⏳ Генератор сейчас перегружен. Попробуйте ещё раз через 1–2 минуты 🙂")
+        cleaned = remove_bottom_right_watermark(r.content)
+        await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
+
+    except Exception:
+        await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
 
 # ========= AI ANSWERS BY PHOTO (OCR) =========
 def ocr_image_bytes(image_bytes: bytes) -> str:
@@ -505,18 +462,14 @@ async def image_btn(msg):
     WAITING_IMAGE.add(msg.from_user.id)
     await msg.answer("🖼 Напишите описание изображения")
 
+from aiogram.dispatcher.handler import async_task
+
 @dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE, content_types=types.ContentTypes.TEXT)
-async def image_prompt(msg):
-    text = (msg.text or "").strip()
-
-    # если человек передумал и написал обычное слово — выходим из режима картинки
-    if len(text) < 5:
-        WAITING_IMAGE.discard(msg.from_user.id)
-        await msg.answer("Ок 🙂 Режим создания изображения отменён.")
-        return
-
+@async_task
+async def image_prompt(msg: types.Message):
     WAITING_IMAGE.discard(msg.from_user.id)
-    await send_generated_image(msg, text)
+    await send_generated_image(msg, msg.text)
+)
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -749,6 +702,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
