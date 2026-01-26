@@ -147,14 +147,7 @@ def generate_image(prompt: str) -> str:
     prompt = (prompt or "").strip()
     if not prompt:
         return ""
-
-    base = f"https://gen.pollinations.ai/image/{quote(prompt)}"
-
-    params = []
-    if POLLINATIONS_API_KEY:
-        params.append(f"key={quote(POLLINATIONS_API_KEY)}")
-
-    return base + ("?" + "&".join(params) if params else "")
+    return f"https://gen.pollinations.ai/image/{quote(prompt)}"
 
 def is_pollinations_limit_image(image_bytes: bytes) -> bool:
     """
@@ -460,6 +453,7 @@ async def image_btn(msg):
     await msg.answer("🖼 Напишите описание изображения")
 
 @dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE, content_types=types.ContentTypes.TEXT)
+@dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE, content_types=types.ContentTypes.TEXT)
 async def image_prompt(msg: types.Message):
     WAITING_IMAGE.discard(msg.from_user.id)
 
@@ -468,33 +462,20 @@ async def image_prompt(msg: types.Message):
         await msg.answer("🖼 Напишите описание изображения 🙂")
         return
 
-    url = generate_image(prompt)
-
     try:
-        await msg.answer(f"DEBUG: URL\n{url[:200]}...")  # покажет, что реально генерим ссылку
-
-        r = requests.get(url, timeout=20)
+        url = generate_image(prompt)
+        r = requests.get(url, timeout=40)
 
         ctype = (r.headers.get("Content-Type") or "").lower()
-        await msg.answer(
-            f"DEBUG: status={r.status_code}\n"
-            f"content-type={ctype}\n"
-            f"bytes={len(r.content)}"
-        )
-
-        if r.status_code != 200 or not r.content:
-            await msg.answer("⏳ Генератор не отдал картинку. Попробуйте позже 🙂")
-            return
-
-        if "image" not in ctype:
-            await msg.answer("⛔ Pollinations вернул не картинку (текст/ошибку). Попробуйте позже 🙂")
+        if r.status_code != 200 or not r.content or "image" not in ctype:
+            await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
             return
 
         cleaned = remove_bottom_right_watermark(r.content)
         await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
 
-    except Exception as e:
-        await msg.answer(f"DEBUG EXCEPTION:\n{repr(e)}")
+    except Exception:
+        await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -727,6 +708,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
