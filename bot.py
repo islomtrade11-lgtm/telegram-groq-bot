@@ -144,52 +144,43 @@ from aiogram import types
 
 def generate_image(prompt: str) -> str:
     prompt = (prompt or "").strip()
-    if not prompt:
-        return ""
     return f"https://image.pollinations.ai/prompt/{quote(prompt)}"
+
+
+def is_pollinations_limit_image(image_bytes: bytes) -> bool:
+    """
+    Проверка заглушки лимита Pollinations (RATE LIMIT REACHED).
+    """
+    try:
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+        w, h = img.size
+
+        # заглушка примерно квадратная 650-900px
+        if not (650 <= w <= 900 and 650 <= h <= 900):
+            return False
+
+        # цвет верхнего баннера (примерно бежевый)
+        r, g, b = img.getpixel((w // 2, int(h * 0.08)))
+        return (r > 170 and g > 140 and b < 140)
+    except:
+        return False
 
 
 def remove_bottom_right_watermark(image_bytes: bytes) -> bytes:
     """
-    Убирает watermark снизу справа, обрезая правый-нижний угол.
+    Обрезаем правый нижний угол (там watermark).
     """
     img = Image.open(BytesIO(image_bytes)).convert("RGB")
     w, h = img.size
 
-    # обрезаем небольшой угол (под watermark)
     cut_w = int(w * 0.18)   # 18% справа
     cut_h = int(h * 0.12)   # 12% снизу
 
-    new_img = img.crop((0, 0, w - cut_w, h - cut_h))
+    img2 = img.crop((0, 0, w - cut_w, h - cut_h))
 
     out = BytesIO()
-    new_img.save(out, format="JPEG", quality=95)
+    img2.save(out, format="JPEG", quality=95)
     return out.getvalue()
-
-
-async def send_generated_image(msg, user_text: str):
-    prompt = (user_text or "").strip()
-
-    if len(prompt) < 2:
-        await msg.answer("🖼 Напишите описание чуть подробнее 🙂")
-        return
-        
-    try:
-        url = generate_image(prompt)
-        if not url:
-            await msg.answer("🖼 Напишите описание изображения 🙂")
-            return
-
-        r = requests.get(url, timeout=35)
-        if r.status_code != 200 or not r.content:
-            await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
-            return
-
-        cleaned = remove_bottom_right_watermark(r.content)
-        await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
-
-    except Exception:
-        await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
 
 # ========= AI ANSWERS BY PHOTO (OCR) =========
 def ocr_image_bytes(image_bytes: bytes) -> str:
@@ -463,10 +454,26 @@ async def image_btn(msg):
 @dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE, content_types=types.ContentTypes.TEXT)
 async def image_prompt(msg: types.Message):
     WAITING_IMAGE.discard(msg.from_user.id)
-    await msg.answer("🎨 Генерирую изображение...")
 
-    # запуск в фоне, чтобы webhook не висел
-    asyncio.create_task(send_generated_image(msg, msg.text))
+    try:
+        url = generate_image(msg.text)
+
+        r = requests.get(url, timeout=40)
+        if r.status_code != 200 or not r.content:
+            await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
+            return
+
+        # если лимит — не отправляем картинку-заглушку
+        if is_pollinations_limit_image(r.content):
+            await msg.answer("🚫 Сейчас лимит генерации изображений. Попробуйте позже 🙂")
+            return
+
+        cleaned = remove_bottom_right_watermark(r.content)
+        await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
+
+    except Exception:
+        await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
+
 
 @dp.message_handler(lambda m: m.text == "🗑 Очистить диалог")
 async def clear(msg):
@@ -699,6 +706,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
