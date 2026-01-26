@@ -15,7 +15,7 @@ WEBHOOK_HOST = os.getenv("WEBHOOK_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 OCR_API_KEY = os.getenv("OCR_API_KEY")
-POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
+POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "").strip()
 
 # ========= DB SETTINGS =========
 DIALOG_LIMIT = int(os.getenv("DIALOG_LIMIT", "40"))          # сколько сообщений хранить на пользователя
@@ -143,11 +143,39 @@ from io import BytesIO
 import requests
 from aiogram import types
 
-def generate_image(prompt: str) -> str:
+def pollinations_generate_bytes(prompt: str) -> bytes:
     prompt = (prompt or "").strip()
     if not prompt:
-        return ""
-    return f"https://gen.pollinations.ai/image/{quote(prompt)}"
+        return b""
+
+    url = f"https://gen.pollinations.ai/image/{quote(prompt)}"
+
+    params = {
+        "model": "flux",          # стабильный
+        "seed": -1,               # рандом
+        "width": 768,
+        "height": 768,
+        "enhance": "false",
+        "safe": "false",
+        "negative_prompt": "worst quality, blurry, text, watermark, logo"
+    }
+
+    headers = {}
+    if POLLINATIONS_API_KEY:
+        headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
+
+    r = requests.get(url, params=params, headers=headers, timeout=60)
+
+    # если вернулся JSON — значит ошибка
+    ctype = (r.headers.get("Content-Type") or "").lower()
+    if "application/json" in ctype:
+        # вернём пусто, а текст ошибки обработаем выше
+        return b""
+
+    if r.status_code != 200 or not r.content:
+        return b""
+
+    return r.content
 
 def is_pollinations_limit_image(image_bytes: bytes) -> bool:
     """
@@ -451,8 +479,7 @@ async def start(msg):
 async def image_btn(msg):
     WAITING_IMAGE.add(msg.from_user.id)
     await msg.answer("🖼 Напишите описание изображения")
-
-@dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE, content_types=types.ContentTypes.TEXT)
+    
 @dp.message_handler(lambda m: m.from_user.id in WAITING_IMAGE, content_types=types.ContentTypes.TEXT)
 async def image_prompt(msg: types.Message):
     WAITING_IMAGE.discard(msg.from_user.id)
@@ -462,16 +489,16 @@ async def image_prompt(msg: types.Message):
         await msg.answer("🖼 Напишите описание изображения 🙂")
         return
 
-    try:
-        url = generate_image(prompt)
-        r = requests.get(url, timeout=40)
+    await msg.answer("🎨 Генерирую изображение...")
 
-        ctype = (r.headers.get("Content-Type") or "").lower()
-        if r.status_code != 200 or not r.content or "image" not in ctype:
-            await msg.answer("⏳ Сейчас генератор занят. Попробуйте ещё раз чуть позже 🙂")
+    try:
+        img_bytes = pollinations_generate_bytes(prompt)
+
+        if not img_bytes:
+            await msg.answer("⏳ Сейчас генератор занят или ключ не подходит. Попробуйте ещё раз позже 🙂")
             return
 
-        cleaned = remove_bottom_right_watermark(r.content)
+        cleaned = remove_bottom_right_watermark(img_bytes)
         await msg.answer_photo(types.InputFile(BytesIO(cleaned), filename="image.jpg"))
 
     except Exception:
@@ -708,6 +735,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
+
 
 
 
